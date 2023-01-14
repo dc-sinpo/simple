@@ -1,0 +1,62 @@
+#ifndef TOK
+#define TOK(ID, TEXT)
+#endif
+
+#ifndef KEYWORD
+#define KEYWORD(ID, TEXT) TOK(ID, TEXT)
+#endif
+
+KEYWORD(Int, "int")
+KEYWORD(Float, "float")
+KEYWORD(Void, "void")
+KEYWORD(Def, "fn")
+KEYWORD(If, "if")
+KEYWORD(Else, "else")
+KEYWORD(For, "for")
+KEYWORD(While, "while")
+KEYWORD(Return, "return")
+KEYWORD(Break, "break")
+KEYWORD(Continue, "continue")
+KEYWORD(Var, "let")
+TOK(Identifier, "identifier")
+
+TOK(IntNumber, "")
+TOK(FloatNumber, "")
+
+TOK(Plus, "+")
+TOK(PlusPlus, "++")
+TOK(Minus, "-")
+TOK(MinusMinus, "--")
+TOK(Not, "!")
+TOK(Tilda, "~")
+TOK(Mul, "*")
+TOK(Div, "/")
+TOK(Mod, "%")
+TOK(LShift, "<<")
+TOK(RShift, ">>")
+TOK(LogAnd, "&&")
+TOK(LogOr, "||")
+TOK(BitAnd, "&")
+TOK(BitOr, "|")
+TOK(BitXor, "^")
+TOK(Less, "<")
+TOK(Greater, ">")
+TOK(LessEqual, "<=")
+TOK(GreaterEqual, ">=")
+TOK(Equal, "==")
+TOK(NotEqual, "!=")
+TOK(Assign, "=")
+TOK(Comma, ",")
+TOK(Question, "?")
+TOK(Colon, ":")
+TOK(Semicolon, ";")
+TOK(OpenParen, "(")
+TOK(CloseParen, ")")
+TOK(BlockStart, "{")
+TOK(BlockEnd, "}")
+
+TOK(Invalid, "")
+TOK(EndOfFile, "EOF")
+
+#undef KEYWORD
+#undef TOK
