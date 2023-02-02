@@ -58,13 +58,11 @@ StmtAST* BlockStmtAST::doSemantic(Scope* scope) {
   ThisBlock = new ScopeSymbol(Loc, SymbolAST::SI_Block, nullptr);
   Scope* s = scope->push((ScopeSymbol*)ThisBlock);
   
-  // Create landing pad 
-  // Note: We patch NeedCleanup later if needed
+  // Create landing pad
   LandingPad = new LandingPadAST(s->LandingPad);
   LandingPad->OwnerBlock = this;
   s->LandingPad = LandingPad;
 
-  bool atStart = true; // We need that for new blocks creation
   ExprList args;
 
   // Check all nested statements
@@ -73,11 +71,6 @@ StmtAST* BlockStmtAST::doSemantic(Scope* scope) {
     if (HasJump) {
       scope->report(Loc, diag::ERR_SemaDeadCode);
       return nullptr;
-    }
-
-    if (!isa<DeclStmtAST>(*it)) {
-      // If it's not declaration then we should set atStart to false
-      atStart = false;
     }
 
     // Check semantic for statement
@@ -179,7 +172,7 @@ StmtAST* ReturnStmtAST::doSemantic(Scope* scope) {
     // Perform semantic of return value
     Expr = Expr->semantic(scope);
 
-    if (scope->EnclosedFunc->ReturnType != Expr->ExprType) {
+    if (!scope->EnclosedFunc->ReturnType->equal(Expr->ExprType)) {
       Expr = new CastExprAST(Loc, Expr, scope->EnclosedFunc->ReturnType);
       Expr = Expr->semantic(scope);
     }
@@ -295,7 +288,9 @@ StmtAST* ForStmtAST::doSemantic(Scope* scope) {
     StmtList stmts;
 
     // Add initialization as 1st member of new block statement (if was set)
-    if (init) stmts.push_back(init);
+    if (init) {
+      stmts.push_back(init);
+    }
 
     // Create new while-loop and add it as 2nd statement for the block
     WhileStmtAST* newLoop = new WhileStmtAST(Loc, new IntExprAST(Loc, 1), Body);

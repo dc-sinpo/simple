@@ -47,7 +47,7 @@ bool IdExprAST::isLValue() {
 }
 
 ExprAST* IdExprAST::semantic(Scope* scope) {
-  // if ExprType isn't nullptr then semantic pass was already passed for this
+  // if ThisSym isn't nullptr then semantic pass was already passed for this
   // expression
   if (!ThisSym) {
     // Try to find identifier in the current scope
@@ -80,7 +80,7 @@ ExprAST* CastExprAST::semantic(Scope* scope) {
   }
 
   // Make sure that we set type for cast
-  assert(ExprType != 0 && "Type for cast not set"); 
+  assert(ExprType != nullptr && "Type for cast not set"); 
   if (ExprType->isVoid()) {
     scope->report(Loc, diag::ERR_SemaCastToVoid);
     return nullptr;
@@ -414,7 +414,7 @@ ExprAST* CondExprAST::semantic(Scope* scope) {
   ElseExpr = ElseExpr->semantic(scope);
 
   // Conditional part shouldn't have void type
-  if (Cond->ExprType == 0 || Cond->ExprType->isVoid()) {
+  if (Cond->ExprType == nullptr || Cond->ExprType->isVoid()) {
     scope->report(Loc, diag::ERR_SemaConditionIsVoid);
     return nullptr;
   }
@@ -429,7 +429,7 @@ ExprAST* CondExprAST::semantic(Scope* scope) {
   ExprType = IfExpr->ExprType;
 
   // If both parts have same types then we are done
-  if (IfExpr->ExprType == ElseExpr->ExprType) {
+  if (IfExpr->ExprType->equal(ElseExpr->ExprType)) {
     SemaDone = true;
     return this;
   }
@@ -454,30 +454,6 @@ ExprAST* CondExprAST::clone() {
 }
 
 // CallExprAST implementation
-
-/// Check is \c func1 is more specialized than \c func2
-/// \param[in] func1 - 1st function
-/// \param[in] func2 - 2nd function
-static bool moreSpecialized(SymbolAST* func1, SymbolAST* func2) {
-  FuncTypeAST* type1 = (FuncTypeAST*)((FuncDeclAST*)func1)->ThisType;
-  FuncTypeAST* type2 = (FuncTypeAST*)((FuncDeclAST*)func2)->ThisType;
-
-  ParameterList::iterator it1 = type1->Params.begin();
-  ParameterList::iterator it2 = type2->Params.begin();
-  ParameterList::iterator end = type1->Params.end();
-
-  // Check all arguments
-  for ( ; it1 != end; ++it1, ++it2) {
-    // If argument of 1st function can't convert to argument of the 2nd function
-    // then func1 function is more specialized than func2
-    if (!((*it1)->Param->implicitConvertTo((*it2)->Param))) {
-      return true;
-    }
-  }
-
-  // func1 is not more specialized than func2
-  return false;
-}
 
 /// Resolve function \c func call with \c arg as arguments
 /// \param[in] func - function or overload set to call
@@ -523,7 +499,7 @@ ExprAST* CallExprAST::semantic(Scope* scope) {
   // Perform semantic on callee
   Callee = Callee->semantic(scope);
 
-  // We allow only IdExprAST or MemberAccessAST as callee
+  // We allow only IdExprAST as callee
   if (isa<IdExprAST>(Callee)) {
     SymbolAST* sym = ((IdExprAST*)Callee)->ThisSym;
 

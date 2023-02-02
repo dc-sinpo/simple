@@ -76,8 +76,9 @@ bool BuiltinTypeAST::implicitConvertTo(TypeAST* newType) {
     { false, true,  true,  true  }, // float
   };
 
-  if (newType->TypeKind > TI_Float)
+  if (newType->TypeKind > TI_Float) {
     return false;
+  }
 
   return convertResults[TypeKind][newType->TypeKind];
 }
@@ -123,12 +124,6 @@ void FuncTypeAST::toMangleBuffer(llvm::raw_ostream& output) {
   }
   
   ParameterList::iterator it = Params.begin(), end = Params.end();
-
-  // Append v if function has 0 parameters beside this
-  if (it == end) {
-    output << "v";
-    return;
-  }
 
   // Write parameters' types to mangle buffer 
   for ( ; it != end; ++it) {
