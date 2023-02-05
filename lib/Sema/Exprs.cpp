@@ -17,7 +17,7 @@ bool ExprAST::isLValue() {
 
 // IntExprAST implementation
 bool IntExprAST::isTrue() {
-  return true;
+  return Val != 0;
 }
 
 ExprAST* IntExprAST::semantic(Scope* ) {
