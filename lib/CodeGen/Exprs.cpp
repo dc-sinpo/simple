@@ -133,32 +133,20 @@ Value* BinaryExprAST::getRValue(SLContext& Context) {
     Value* var = LeftExpr->getLValue(Context);
     Value* val = LeftExpr->getRValue(Context);
 
-    if (!LeftExpr->ExprType->isInt()) {
-      // Special case for pointer types. We should generate GetElementPtr
-      // instruction
-      Value* tmp = getConstInt((Op == tok::PlusPlus) ? 1ULL : ~0ULL);
-      Type *resType = Type::getInt8Ty(getGlobalContext());
-
-      tmp = Context.TheBuilder->CreateGEP(resType, val, tmp);
+    if (Op == tok::PlusPlus) {
+      // Create integral constant 1 and add it to loaded variable
+      Value* tmp = getConstInt(1);
+      tmp = Context.TheBuilder->CreateAdd(val, tmp, "inctmp");
       // Store result and return old value
       Context.TheBuilder->CreateStore(tmp, var);
       return val;
     } else {
-      if (Op == tok::PlusPlus) {
-        // Create integral constant 1 and add it to loaded variable
-        Value* tmp = getConstInt(1);
-        tmp = Context.TheBuilder->CreateAdd(val, tmp, "inctmp");
-        // Store result and return old value
-        Context.TheBuilder->CreateStore(tmp, var);
-        return val;
-      } else {
-        // Create integral constant -1 and add it to loaded variable
-        Value* tmp = getConstInt(~0ULL);
-        tmp = Context.TheBuilder->CreateAdd(val, tmp, "dectmp");
-        // Store result and return old value
-        Context.TheBuilder->CreateStore(tmp, var);
-        return val;
-      }
+      // Create integral constant -1 and add it to loaded variable
+      Value* tmp = getConstInt(~0ULL);
+      tmp = Context.TheBuilder->CreateAdd(val, tmp, "dectmp");
+      // Store result and return old value
+      Context.TheBuilder->CreateStore(tmp, var);
+      return val;
     }
   }
 
@@ -402,7 +390,6 @@ Value* CallExprAST::getRValue(SLContext& Context) {
   Value* callee = nullptr;
   std::vector< Value* > args;
   ExprList::iterator it = Args.begin();
-  Value* forcedReturn = nullptr;
 
   // Check is it virtual call or not
   assert(isa<FuncDeclAST>(CallFunc));
@@ -419,12 +406,6 @@ Value* CallExprAST::getRValue(SLContext& Context) {
     Value* v = (*it)->getRValue(Context);
     args.push_back(v);
   }
-
-  if (forcedReturn) {
-    // It's forced this. Create call and return calculated return value
-    Context.TheBuilder->CreateCall(funcType, callee, args);
-    return forcedReturn;
-  } 
   
   // Generate function's call
   return Context.TheBuilder->CreateCall(funcType, callee, args);

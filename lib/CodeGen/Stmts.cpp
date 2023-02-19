@@ -28,26 +28,19 @@ llvm::Value* BlockStmtAST::generatePartialCode(SLContext& Context,
 
   // Create new block for FalltrhoughLoc
   LandingPad->FallthroughLoc = BasicBlock::Create(getGlobalContext(), "block");
-  
-  StmtAST* lastStmt = nullptr;
-  BasicBlock* lastFallThrough = nullptr;
-  BasicBlock* lastInsertionPoint = nullptr;
 
   // Generate code for every nested statement
   for (; it != end; ++it) {
     // Save FallthroughLoc
     BasicBlock* fallthroughBB = LandingPad->FallthroughLoc;
-    lastFallThrough = LandingPad->FallthroughLoc;
 
-    lastStmt = *it;
     // Generate code for nested statement
-    lastStmt->generateCode(Context);
+    (*it)->generateCode(Context);
 
     // Check was FallthroughLoc used in nested statement or not
     if (!LandingPad->FallthroughLoc) {
       // It was. Add it fall through block the end of the function and set
       // it as insert point
-      lastInsertionPoint = Context.TheBuilder->GetInsertBlock();
       Context.TheFunction->getBasicBlockList().push_back(fallthroughBB);
       Context.TheBuilder->SetInsertPoint(fallthroughBB);
 
