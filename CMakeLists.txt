@@ -3,10 +3,10 @@ project(simple VERSION 0.1.0)
 
 
 
-find_package(LLVM 14 REQUIRED CONFIG)
+find_package(LLVM 15 REQUIRED CONFIG)
 
 # Another sanity check
-if(NOT "14" VERSION_EQUAL "${LLVM_VERSION_MAJOR}")
+if(NOT "15" VERSION_EQUAL "${LLVM_VERSION_MAJOR}")
   message(FATAL_ERROR "Found LLVM ${LLVM_VERSION_MAJOR}, but need LLVM 14")
 endif()
 
