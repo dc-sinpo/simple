@@ -346,7 +346,7 @@ struct ParameterAST {
   ParameterAST(TypeAST* type, Name* id)
     : Param(type),
       Id(id),
-      CodeValue(0) {
+      CodeValue(nullptr) {
   }
 
   ~ParameterAST() {
@@ -390,7 +390,7 @@ struct FuncTypeAST : TypeAST {
     return T->TypeKind == TI_Function;
   }
 
-  TypeAST* ReturnType; ///< Type of function's return value (0 for void)
+  TypeAST* ReturnType; ///< Type of function's return value (nullptr for void)
   ParameterList Params; ///< List of function's parameters
 };
 
@@ -669,12 +669,12 @@ struct LandingPadAST {
   /// \param[in] prev - previous landing location
   LandingPadAST(LandingPadAST* prev)
     : Prev(prev),
-      ReturnValue(0),
-      OwnerBlock(0),
-      BreakLoc(0),
-      ContinueLoc(0),
-      ReturnLoc(0),
-      FallthroughLoc(0),
+      ReturnValue(nullptr),
+      OwnerBlock(nullptr),
+      BreakLoc(nullptr),
+      ContinueLoc(nullptr),
+      ReturnLoc(nullptr),
+      FallthroughLoc(nullptr),
       Breaks(0),
       Returns(0),
       Continues(0),
@@ -683,13 +683,13 @@ struct LandingPadAST {
 
   /// Constructor
   LandingPadAST()
-    : Prev(0),
-      ReturnValue(0),
-      OwnerBlock(0),
-      BreakLoc(0),
-      ContinueLoc(0),
-      ReturnLoc(0),
-      FallthroughLoc(0),
+    : Prev(nullptr),
+      ReturnValue(nullptr),
+      OwnerBlock(nullptr),
+      BreakLoc(nullptr),
+      ContinueLoc(nullptr),
+      ReturnLoc(nullptr),
+      FallthroughLoc(nullptr),
       Breaks(0),
       Returns(0),
       Continues(0),
@@ -751,7 +751,7 @@ struct IfStmtAST : StmtAST {
 
   ExprAST* Cond; ///< if condition
   StmtAST* ThenBody; ///< Body of then part
-  StmtAST* ElseBody; ///< Body of else part (can be 0)
+  StmtAST* ElseBody; ///< Body of else part (can be nullptr)
 
   LandingPadAST* LandingPad; ///< Landing pad
 };
@@ -840,7 +840,7 @@ struct ContinueStmtAST : StmtAST {
 struct ReturnStmtAST : StmtAST {
   /// Constructor
   /// \param[in] loc - location in the source file
-  /// \param[in] expr - value to return (0 for return from void function)
+  /// \param[in] expr - value to return (nullptr for return from void function)
   ReturnStmtAST(llvm::SMLoc loc, ExprAST *expr)
     : StmtAST(loc, SI_Return),
       Expr(expr),
@@ -861,7 +861,7 @@ struct ReturnStmtAST : StmtAST {
     return S->StmtKind == SI_Return;
   }
 
-  ExprAST* Expr; ///< Value to return (0 for return from void function)
+  ExprAST* Expr; ///< Value to return (nullptr for return from void function)
   LandingPadAST* ReturnLoc; ///< Return location (only valid after semantic)
 };
 
@@ -1001,13 +1001,13 @@ struct VarDeclAST : SymbolAST {
   /// \param[in] loc - location in the source file
   /// \param[in] varType - symbol's type
   /// \param[in] id - symbol's name
-  /// \param[in] value - symbol's initialization value (can be 0)
+  /// \param[in] value - symbol's initialization value (can be nullptr)
   VarDeclAST(llvm::SMLoc loc, TypeAST *varType, Name *id,
     ExprAST* value)
     : SymbolAST(loc, SI_Variable, id),
       ThisType(varType),
       Val(value),
-      CodeValue(0) {
+      CodeValue(nullptr) {
   }
 
   /// Destructor
@@ -1027,7 +1027,7 @@ struct VarDeclAST : SymbolAST {
   }
 
   TypeAST* ThisType; ///< Symbol's type
-  ExprAST* Val; ///< Symbol's initialization value (can be 0)
+  ExprAST* Val; ///< Symbol's initialization value (can be nullptr)
 
   /// LLVM value for this symbol (only valid during code generation pass)
   llvm::Value* CodeValue;
@@ -1096,7 +1096,7 @@ struct FuncDeclAST : ScopeSymbol {
       Body(body),
       Tok(tok),
       LandingPad(nullptr),
-      CodeValue(0),
+      CodeValue(nullptr),
       Compiled(false) {
   }
 
@@ -1144,9 +1144,9 @@ struct ModuleDeclAST : ScopeSymbol {
   /// Constructor
   /// \param[in] decls - list of all module declarations
   ModuleDeclAST(DiagnosticsEngine &D, const SymbolList& decls)
-    : ScopeSymbol(llvm::SMLoc(), SI_Module, 0),
+    : ScopeSymbol(llvm::SMLoc(), SI_Module, nullptr),
       Members(decls),
-      MainPtr(0),
+      MainPtr(nullptr),
       Diag(D) {
   }
 

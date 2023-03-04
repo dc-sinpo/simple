@@ -21,7 +21,7 @@ TokenStream::~TokenStream() {
 
 TokenStream::TokenStreamIterator TokenStream::begin() {
   // Check for 1st time usage
-  if (Head == 0) {
+  if (!Head) {
     // Create Head, Tail and read 1st token
     StreamNode *p = new StreamNode(nullptr, nullptr);
 
@@ -35,7 +35,7 @@ TokenStream::TokenStreamIterator TokenStream::begin() {
 
 TokenStream::StreamNode *TokenStream::next(StreamNode *curPos) {
   // We should check for 1st scan first
-  if (curPos->Next == 0) {
+  if (!curPos->Next) {
     // If end of file reached then we should return curPos again
     if (ScanDone) {
       return curPos;

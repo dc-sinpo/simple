@@ -41,8 +41,8 @@ Value* VarDeclAST::getValue(SLContext& Context) {
   }
 
   // Create alloca instruction for this variable
-  CodeValue = Context.TheBuilder->CreateAlloca(ThisType->getType(), 0, 
-    StringRef(Id->Id, Id->Length));
+  CodeValue = Context.TheBuilder->CreateAlloca(ThisType->getType(),
+    nullptr, StringRef(Id->Id, Id->Length));
   return CodeValue;
 }
 
@@ -53,7 +53,7 @@ llvm::Value* ParameterSymbolAST::getValue(SLContext& Context) {
   }
 
   // Create alloca instruction for this parameter
-  Param->CodeValue = Context.TheBuilder->CreateAlloca(Param->Param->getType(), 0U);
+  Param->CodeValue = Context.TheBuilder->CreateAlloca(Param->Param->getType());
   return Param->CodeValue;
 }
 
@@ -127,7 +127,7 @@ Value* FuncDeclAST::generateCode(SLContext& Context) {
       // Generate alloca instruction (if needed) and store value passed to 
       // function to named value
       if (!p->CodeValue) {
-        p->CodeValue = Context.TheBuilder->CreateAlloca(p->Param->getType(), 0U);
+        p->CodeValue = Context.TheBuilder->CreateAlloca(p->Param->getType());
       }
 
       Context.TheBuilder->CreateStore(AI, p->CodeValue);
@@ -139,7 +139,7 @@ Value* FuncDeclAST::generateCode(SLContext& Context) {
   if (!ReturnType->isVoid()) {
     LandingPad->ReturnValue = Context.TheBuilder->CreateAlloca(
       ReturnType->getType(),
-      0U,
+      nullptr,
       "return.value"
     );
   }

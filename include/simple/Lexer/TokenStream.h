@@ -100,7 +100,7 @@ class TokenStream {
 
     /// Prefix decrement
     TokenStreamIterator &operator --() {
-      if (CurPos->Prev != 0) {
+      if (CurPos->Prev) {
         CurPos = CurPos->Prev;
       }
       return *this;

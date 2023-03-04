@@ -365,8 +365,13 @@ Value* generateCondExpr(SLContext& Context, ExprAST* Cond, ExprAST* IfExpr,
   
   if (isLValue) {
     // For lvalue we get pointer to original expression's type
-    PN = Context.TheBuilder->CreatePHI(PointerType::get(IfExpr->ExprType->getType(), 
-      0), 2);
+    PN = Context.TheBuilder->CreatePHI(
+      PointerType::get(
+        getGlobalContext(),
+        Context.TheTarget->getProgramAddressSpace()
+      ),
+      2
+    );
   } else {
     PN = Context.TheBuilder->CreatePHI(IfExpr->ExprType->getType(), 2);
   }
