@@ -1,0 +1,115 @@
+fn check(s: string, a: float, b: float) {
+  if (a == b) {
+    printString(s);
+    printString(" ");
+    printLn("Pass");
+  }
+  else {
+    printString(s);
+    printString(" ");
+    printLn("Fail");
+  }
+}
+
+fn main() : float { 
+  {
+    let a: int = 10, b: int = 3;
+
+    printLn("integral operations");
+    check("-a", -a, -10);
+    check("+a", +a, 10);
+    check("!a", !a, 0);
+    check("~a", ~a, -11);
+    check("a + b", a + b, 13);
+    check("a - b", a - b, 7);
+    check("a * b" , a * b, 30);
+    check("a / b", a / b, 3);
+    check("a % b", a % b, 1);
+    check("a << b", a << b, 80);
+    check("a >> b", a >> b, 1);
+    check("a < b", a < b, 0);
+    check("a <= b", a <= b, 0);
+    check("a > b", a > b, 1);
+    check("a >= b", a >= b, 1);
+    check("a != b", a != b, 1);
+    check("a == b", a == b, 0);
+    check("a & b", a & b, 2);
+    check("a | b", a | b, 11);
+    check("a ^ b", a ^ b, 9);
+    check("a || 0", a || 0, 1);
+    check("0 || a", 0 || a, 1);
+    check("a && 0", a && 0, 0);
+    check("a && 1", a && 1, 1);
+    check("a && b", a && b, 1);
+    if (a) {
+      printLn("if (a) Pass");
+    } else {
+      printLn("if (a) Fail");
+    }
+  }
+  printLn("");
+  {
+    let a: float = 10.0, b: float = 3.0;
+
+    printLn("floating point operations");
+    check("-a", -a, -10);
+    check("+a", +a, 10);
+    check("!a", !a, 0);
+    check("a + b", a + b, 13);
+    check("a - b", a - b, 7);
+    check("a * b" , a * b, 30);
+    check("a / b", a / b, 10.0 / 3.0);
+    check("a % b", a % b, 1);
+    check("a < b", a < b, 0);
+    check("a <= b", a <= b, 0);
+    check("a > b", a > b, 1);
+    check("a >= b", a >= b, 1);
+    check("a != b", a != b, 1);
+    check("a == b", a == b, 0);
+    check("a || 0", a || 0, 1);
+    check("0 || a", 0 || a, 1);
+    check("a && 0", a && 0, 0);
+    check("a && 1", a && 1, 1);
+    check("a && b", a && b, 1);
+    if (a) {
+      printLn("if (a) Pass");
+    } else {
+      printLn("if (a) Fail");
+    }
+  }
+  printLn("");
+  {
+    let a: int = 0;
+
+    printLn("increment/decrement operations");
+    check("a++", a++, 0);
+    check("a", a, 1);
+    check("++a", ++a, 2);
+    check("a--", a--, 2);
+    check("a", a, 1);
+    check("--a", --a, 0);
+  }
+  printLn("");
+  {
+    let a: int = 0;
+    let p: int* = &a;
+
+    printLn("pointer operations");
+    check("*p", *p, 0);
+    a = 10;
+    check("*p", *p, 10);
+    check("*p = 2", *p = 2, 2);
+  }
+  printLn("");
+  {
+    let a: int = 10, b: int = 20, c: int = 2;
+
+    printLn("other operators");
+    check("a, b, c", (a, b, c), 2);
+    check("a ? b : c", (a ? b : c), 20);
+    check("(a ? b : c) = 33", (a ? b : c) = 33, 33);
+    check("b", b, 33);
+  }
+
+  return 0.0;
+}

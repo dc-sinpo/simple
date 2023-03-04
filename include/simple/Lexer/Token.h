@@ -21,11 +21,12 @@ class Token {
   union {
     Name *Id;
     char *Literal;
+    char Chr;
   };
 
 public:
   ~Token() {
-    if (isOneOf(tok::IntNumber, tok::FloatNumber)) {
+    if (isOneOf(tok::IntNumber, tok::FloatNumber, tok::StringConstant)) {
       delete[] Literal;
     }
   }
@@ -59,9 +60,14 @@ public:
   }
 
   StringRef getLiteral() const {
-    assert(isOneOf(tok::IntNumber, tok::FloatNumber) &&
+    assert(isOneOf(tok::IntNumber, tok::FloatNumber, tok::StringConstant) &&
       "Cannot get literal data of non-literal");
     return StringRef(Literal, Length);
+  }
+
+  char getChar() const {
+    assert(is(tok::CharLiteral) && "Cannot get char literal of non-char literal");
+    return Chr;
   }
 };
 } // namespace simple

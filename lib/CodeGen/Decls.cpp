@@ -25,7 +25,38 @@ Value* VarDeclAST::generateCode(SLContext& Context) {
 
   // If we have initialization we should generate code for it
   if (Val) {
-    Value* init = Val->getRValue(Context);
+    Value* init;
+
+    // Check for pointer
+    if (isa<PointerTypeAST>(ThisType)) {
+      // For integral constant generate null
+      if (Val->isIntConst()) {
+        init = ConstantPointerNull::get((PointerType*)ThisType->getType());
+      } else {
+        if (isa<ArrayTypeAST>(Val->ExprType)) {
+          init = Val->getLValue(Context);
+          Value* tmp = getConstInt(0);
+
+          std::vector< Value* > idx;
+
+          idx.push_back(tmp);
+          idx.push_back(tmp);
+
+          if (isa<AllocaInst>(init)) {
+            AllocaInst *alloca = (AllocaInst*)init;
+
+            init = Context.TheBuilder->CreateGEP(alloca->getAllocatedType(), init, idx);
+          } else {
+            assert(0);
+          }
+        } else {
+          init = Val->getRValue(Context);
+        }
+      }
+    } else {
+      // Otherwise generate code for initialization
+      init = Val->getRValue(Context);
+    }
 
     // Create store instruction
     return Context.TheBuilder->CreateStore(init, val);
@@ -44,6 +75,19 @@ Value* VarDeclAST::getValue(SLContext& Context) {
   CodeValue = Context.TheBuilder->CreateAlloca(ThisType->getType(),
     nullptr, StringRef(Id->Id, Id->Length));
   return CodeValue;
+}
+
+Value* StructDeclAST::getValue(SLContext& Context) {
+  // Make sure that type was generated
+  ThisType->getType();
+  return nullptr;
+}
+
+Value* StructDeclAST::generateCode(SLContext& Context) {
+  assert(SemaState >= 5);
+  // Make sure that type was generated
+  ThisType->getType();
+  return nullptr;
 }
 
 llvm::Value* ParameterSymbolAST::getValue(SLContext& Context) {

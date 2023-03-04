@@ -27,6 +27,9 @@ void NamesMap::addKeywords() {
   addName(StringRef(TEXT), tok::NAME);
 #include "simple/Basic/TokenKinds.def"
 
+  Name::New = getName("new");
+  Name::Delete = getName("delete");
+
   IsInit = true;
 }
 
@@ -129,6 +132,9 @@ void Lexer::next(Token &Result) {
       CHECK_ONE(')', tok::CloseParen);
       CHECK_ONE('{', tok::BlockStart);
       CHECK_ONE('}', tok::BlockEnd);
+      CHECK_ONE('[', tok::OpenBrace);
+      CHECK_ONE(']', tok::CloseBrace);
+      CHECK_ONE('.', tok::Dot);
 
       CHECK_TWO('-', '-', tok::MinusMinus, tok::Minus);
       CHECK_TWO('+', '+', tok::PlusPlus, tok::Plus);
@@ -262,6 +268,73 @@ void Lexer::next(Token &Result) {
         memcpy(Result.Literal, tokenStart, Result.Length);
         Result.Literal[Result.Length] = 0;
         break;
+
+      case '\'': {
+        char resultCh = ' ';
+
+        if (*p != '\'') {
+          resultCh = *p;
+          ++p;
+        }
+
+        if (*p != '\'') {
+          Diags.report(getLoc(p), diag::ERR_UnterminatedCharOrString);
+        }
+
+        ++p;
+
+        Result.Length = (int)(p - tokenStart);
+        Result.Chr = resultCh;
+        Result.Kind = tok::CharLiteral;
+        break;
+      }
+
+      case '"': {
+        llvm::SmallString<32> str;
+
+        while (*p != 0) {
+          if (*p == '"') {
+            // If it's " then we are done
+            if (p[1] != '"') {
+              break;
+            }
+
+            // It's "" replace it with "
+            p += 2;
+            str.push_back('"');
+          } else if (*p == '\\') {
+            ++p;
+            // We only allow \\ and \n
+            if (*p == 'n') {
+              str.push_back('\n');
+              ++p;
+            } else if (*p == '\\') {
+              str.push_back('\\');
+              ++p;
+            } else {
+              Diags.report(getLoc(p), diag::ERR_InvalidEscapeSequence);
+            }
+          } else if (*p == '\r' || *p == '\n') {
+            Diags.report(getLoc(p), diag::ERR_NewLineInString);
+          } else {
+            str.push_back(*p);
+            ++p;
+          }
+        }
+
+        if (*p != '"') {
+          Diags.report(getLoc(p), diag::ERR_UnterminatedCharOrString);
+        }
+
+        ++p;
+
+        Result.Kind = tok::StringConstant;
+        Result.Length = str.size();
+        Result.Literal = new char[Result.Length + 1];
+        memcpy(Result.Literal, str.c_str(), Result.Length);
+        Result.Literal[Result.Length] = 0;
+        break;
+      }
 
       default:
         // Check for identifier

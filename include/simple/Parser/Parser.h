@@ -63,7 +63,8 @@ public:
   /// Parse variable declaration
   /// \param[in] needSemicolon - true if ; should be at the end of the
   ///   declaration
-  SymbolList parseDecl(bool needSemicolon);
+  /// \param[in] isClassMember - true if it's class/struct member
+  SymbolList parseDecl(bool needSemicolon, bool isClassMember = false);
 
   /// Parse statement and add it to block statement if needed
   StmtAST *parseStmtAsBlock();

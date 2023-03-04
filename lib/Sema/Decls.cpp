@@ -8,6 +8,10 @@ namespace simple {
 
 // SymbolAST hierarchy implementation
 // SymbolAST implementation
+bool SymbolAST::needThis() {
+  return false;
+}
+
 TypeAST* SymbolAST::getType() {
   assert(0 && "SymbolAST::getType should never be reached");
   return nullptr;
@@ -87,6 +91,10 @@ void SymbolAST::doSemantic5(Scope* ) {
   // By default do nothing
 }
 
+bool SymbolAST::canBeNull() {
+  return true;
+}
+
 SymbolAST* SymbolAST::find(Name* id, int flags) {
   if (id == Id) {
     return this;
@@ -95,16 +103,32 @@ SymbolAST* SymbolAST::find(Name* id, int flags) {
   return nullptr;
 }
 
+bool SymbolAST::contain(TypeAST* type) {
+  return false;
+}
+
 // VarDeclAST implementation
+bool VarDeclAST::needThis() {
+  return NeedThis;
+}
+
 TypeAST* VarDeclAST::getType() {
   return ThisType;
 }
 
 void VarDeclAST::doSemantic(Scope* scope) {
   // We not allow any variable redefinitions
-  if (scope->find(Id)) {
-    scope->report(Loc, diag::ERR_SemaIdentifierRedefinition);
-    return;
+  if (needThis()) {
+    // We still can hide variables from base class
+    if (scope->findMember(Id, 1)) {
+      scope->report(Loc, diag::ERR_SemaIdentifierRedefinition);
+      return;
+    }
+  } else {
+    if (scope->find(Id)) {
+      scope->report(Loc, diag::ERR_SemaIdentifierRedefinition);
+      return;
+    }
   }
 
   // Add variable to both current scope and enclosed function (if set)
@@ -124,10 +148,32 @@ void VarDeclAST::doSemantic3(Scope* scope) {
     // Perform semantic for initialization
     Val = Val->semantic(scope);
 
+    // If it's structure we should generate error
+    if (ThisType->isAggregate()) {
+      scope->report(Loc, diag::ERR_SemaConstructionCallInStruct);
+      return;
+    }
+
     // We disallow initialization with void type
     if (!Val->ExprType || Val->ExprType->isVoid()) {
       scope->report(Loc, diag::ERR_SemaVoidInitializer);
       return;
+    }
+
+    if (isa<PointerTypeAST>(ThisType)) {
+      // If it's int
+      if (Val->ExprType->isInt()) {
+        // check for integral constant 0
+        if (Val->isIntConst() && ((IntExprAST*)Val)->Val != 0) {
+          scope->report(Loc, diag::ERR_SemaPointerInitialization);
+        }
+
+        return;
+      // Check conversion of types
+      } else if (!Val->ExprType->implicitConvertTo(ThisType)) {
+        scope->report(Loc, diag::ERR_SemaPointerInitialization);
+        return;
+      }
     }
 
     // If types not match we should create cast expression
@@ -136,6 +182,22 @@ void VarDeclAST::doSemantic3(Scope* scope) {
       Val = Val->semantic(scope);
     }
   }
+}
+
+bool VarDeclAST::contain(TypeAST* type) {
+  if (ThisType->equal(type)) {
+    return true;
+  }
+
+  return false;
+}
+
+bool VarDeclAST::canBeNull() {
+  if (!isa<PointerTypeAST>(ThisType)) {
+    return false;
+  }
+
+  return true;
 }
 
 // ScopeSymbol implementation
@@ -152,9 +214,70 @@ SymbolAST* ScopeSymbol::find(Name* id, int /*flags*/) {
   return it->second;
 }
 
+// StructDeclAST implementation
+TypeAST* StructDeclAST::getType() {
+  return ThisType;
+}
+
+void StructDeclAST::doSemantic(Scope* scope) {
+  if (scope->find(Id)) {
+    scope->report(Loc, diag::ERR_SemaIdentifierRedefinition);
+    return;
+  }
+
+  Scope* s = scope->push(this);
+
+  ThisType = ThisType->semantic(s);
+
+  ((ScopeSymbol*)scope->CurScope)->Decls[Id] = this;
+  Parent = scope->CurScope;
+
+  s->pop();
+}
+
+void StructDeclAST::doSemantic3(Scope* scope) {
+  Scope* s = scope->push(this);
+  int curOffset = 0;
+
+  // Check every variable declaration
+  for (SymbolList::iterator it = Vars.begin(), end = Vars.end(); it != end; ++it) {
+    VarDeclAST* var = (VarDeclAST*)(*it);
+    
+    // Perform semantic and generate offset for it
+    var->semantic(s);
+    var->OffsetOf = curOffset++;
+  }
+
+  // Check for circular reference
+  if (contain(ThisType)) {
+    scope->report(Loc, diag::ERR_SemaCricularReference, Id->Id);
+    return;
+  }
+
+  s->pop();
+}
+
+bool StructDeclAST::contain(TypeAST* type) {
+  for (SymbolList::iterator it = Vars.begin(), end = Vars.end(); it != end; ++it) {
+    if ((*it)->contain(type)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // ParameterSymbolAST implementation
 TypeAST* ParameterSymbolAST::getType() {
   return Param->Param;
+}
+
+bool ParameterSymbolAST::canBeNull() {
+  if (!isa<PointerTypeAST>(Param->Param)) {
+    return false;
+  }
+
+  return true;
 }
 
 void ParameterSymbolAST::doSemantic(Scope* ) {
@@ -261,8 +384,28 @@ extern "C" void lle_X_printDouble(double val) {
   outs() << val;
 }
 
-extern "C" void lle_X_printLine() {
-  outs() << "\n";
+extern "C" void lle_X_printInt(int val) {
+  outs() << val;
+}
+
+extern "C" void lle_X_printChar(char val) {
+  outs() << val;
+}
+
+extern "C" void lle_X_printString(char* str) {
+  outs() << str;
+}
+
+extern "C" void lle_X_printLine(char* str) {
+  outs() << str << "\n";
+}
+
+extern "C" void* lle_X_new(int size) {
+  return malloc(size);
+}
+
+extern "C" void lle_X_delete(void* block) {
+  free(block);
 }
 
 /// Add runtime function
@@ -294,18 +437,23 @@ FuncDeclAST* addDynamicFunc(const char* protoString, const char* newName,
 }
 
 void initRuntimeFuncs(ModuleDeclAST* modDecl) {
-  addDynamicFunc("fn print(_: float)", "lle_X_printDouble", modDecl, (void*)lle_X_printDouble);
-  addDynamicFunc("fn printLn()", "lle_X_printLine", modDecl, (void*)lle_X_printLine);
+  addDynamicFunc("fn printChar(_: char)", "lle_X_printChar", modDecl, (void*)lle_X_printChar);
+  addDynamicFunc("fn printInt(_: int)", "lle_X_printInt", modDecl, (void*)lle_X_printInt);
+  addDynamicFunc("fn printFloat(_: float)", "lle_X_printDouble", modDecl, (void*)lle_X_printDouble);
+  addDynamicFunc("fn printString(_: string)", "lle_X_printString", modDecl, (void*)lle_X_printString);
+  addDynamicFunc("fn printLn(_: string)", "lle_X_printLine", modDecl, (void*)lle_X_printLine);
+  addDynamicFunc("fn new(_: int) : void*", "lle_X_new", modDecl, (void*)lle_X_new);
+  addDynamicFunc("fn delete(_: void*)", "lle_X_delete", modDecl, (void*)lle_X_delete);
 }
 
 ModuleDeclAST* ModuleDeclAST::load(SourceMgr &SrcMgr, DiagnosticsEngine &Diags, StringRef fileName) {
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
-    FileOrErr = llvm::MemoryBuffer::getFile(fileName);
+        FileOrErr = llvm::MemoryBuffer::getFile(fileName);
 
   if (std::error_code BufferError = FileOrErr.getError()) {
     llvm::WithColor::error(llvm::errs(), "simple")
-      << "Error reading " << fileName << ": "
-      << BufferError.message() << "\n";
+        << "Error reading " << fileName << ": "
+        << BufferError.message() << "\n";
   }
 
   // Tell SrcMgr about this buffer, which is what the
@@ -326,7 +474,7 @@ void ModuleDeclAST::semantic() {
   initRuntimeFuncs(this);
 
   // Perform semantic on all built-in types
-  for (int i = TypeAST::TI_Void; i <= TypeAST::TI_Float; ++i) {
+  for (int i = TypeAST::TI_Void; i <= TypeAST::TI_String; ++i) {
     BuiltinTypeAST::get(i)->semantic(&s);
   }
 

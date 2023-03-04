@@ -23,7 +23,9 @@ void Parser::check(tok::TokenKind tok) {
 /// primary-expr
 ///   ::= floating-point-literal
 ///   ::= integral-literal
-///   ::= identifier
+///   ::= '.'? identifier
+///   ::= char-literal
+///   ::= string-literal
 ///   ::= '(' expr ')'
 ExprAST *Parser::parsePrimaryExpr() {
   ExprAST *result = nullptr;
@@ -39,10 +41,27 @@ ExprAST *Parser::parsePrimaryExpr() {
       ++CurPos;
       return result;
 
+    case tok::CharLiteral:
+      result = new IntExprAST(CurPos.getLocation(), CurPos->getChar());
+      ++CurPos;
+      return result;
+
+    case tok::StringConstant:
+      result = new StringExprAST(CurPos.getLocation(), CurPos->getLiteral());
+      ++CurPos;
+      return result;
+
     case tok::Identifier:
       result = new IdExprAST(CurPos.getLocation(), CurPos->getIdentifier());
       ++CurPos;
       return result;
+
+    case tok::Dot:
+      if ((CurPos + 1) != tok::Identifier) {
+        check(tok::Identifier);
+      }
+      // identifier will be parsed in parsePostfixExpr
+      return new IdExprAST(CurPos.getLocation(), nullptr);
 
     case tok::OpenParen:
       ++CurPos;
@@ -64,6 +83,8 @@ ExprAST *Parser::parsePrimaryExpr() {
 ///   ::= postfix-expr '++'
 ///   ::= postfix-expr '--'
 ///   ::= postfix-expr '(' call-arguments ? ')'
+///   ::= postfix-expr '[' expr ']'
+///   ::= postfix-expr '.' identifier
 ExprAST *Parser::parsePostfixExpr() {
   ExprAST *result = parsePrimaryExpr();
 
@@ -76,6 +97,14 @@ ExprAST *Parser::parsePostfixExpr() {
         result = new BinaryExprAST(loc, op, result, nullptr);
         ++CurPos;
         continue;
+
+      case tok::OpenBrace: {
+        check(tok::OpenBrace);
+        ExprAST *expr = parseExpr();
+        check(tok::CloseBrace);
+        result = new IndexExprAST(loc, result, expr);
+        continue;
+      }
 
       case tok::OpenParen: {
         ++CurPos;
@@ -102,6 +131,23 @@ ExprAST *Parser::parsePostfixExpr() {
         continue;
       }
 
+      case tok::Dot: {
+        while (CurPos == tok::Dot) {
+          ++CurPos;
+
+          Name *name = nullptr;
+
+          if (CurPos == tok::Identifier) {
+            name = CurPos->getIdentifier();
+          }
+
+          check(tok::Identifier);
+          result = new MemberAccessExprAST(loc, result, name);
+        }
+
+        continue;
+      }
+
       default:
         return result;
     }
@@ -116,6 +162,10 @@ ExprAST *Parser::parsePostfixExpr() {
 ///   ::= '--' unary-expr
 ///   ::= '~' unary-expr
 ///   ::= '!' unary-expr
+///   ::= '*' unary-expr
+///   ::= '&' unary-expr
+///   ::= 'del' unary-expr
+///   ::= 'new' type ('[' assign-expr ']')?
 ExprAST *Parser::parseUnaryExpr() {
   ExprAST *result = nullptr;
   llvm::SMLoc loc = CurPos.getLocation();
@@ -130,6 +180,44 @@ ExprAST *Parser::parseUnaryExpr() {
       ++CurPos;
       result = parseUnaryExpr();
       return new UnaryExprAST(loc, op, result);
+
+    case tok::Mul:
+      ++CurPos;
+      result = parseUnaryExpr();
+      return new DerefExprAST(loc, result);
+
+    case tok::BitAnd:
+      ++CurPos;
+      result = parseUnaryExpr();
+      return new AddressOfExprAST(loc, result);
+
+    case tok::Delete: {
+      ++CurPos;
+      result = parsePostfixExpr();
+      return new DeleteExprAST(loc, result);
+    }
+
+    case tok::New: {
+      ++CurPos;
+      TypeAST *type = parseType();
+      ExprList args;
+      ExprAST *dynamicSize = nullptr;
+
+      // Check for [ expression ]
+      // Note: [ integral-constant ] could be parsed in parseType
+      if (CurPos == tok::OpenBrace) {
+        if (isa<QualifiedTypeAST>(type)) {
+          getDiagnostics().report(CurPos.getLocation(),
+                                  diag::ERR_DynArrayAggregate);
+        }
+
+        ++CurPos;
+        dynamicSize = parseAssignExpr();
+        check(tok::CloseBrace);
+      }
+
+      return new NewExprAST(loc, type, dynamicSize, args);
+    }
 
     default:
       return parsePostfixExpr();
@@ -283,7 +371,17 @@ ExprAST *Parser::parseExpr() {
   return parseRHS(lhs, OPL_Comma);
 }
 
-/// type ::= 'int' | 'float' | 'void'
+/// basic-type 
+///  ::= 'int'
+///  ::= 'float'
+///  ::= 'void'
+///  ::= 'char'
+///  ::= 'string'
+///  ::= '.'? identifier ('.' identifier)*
+/// type
+///   ::= basic-type
+///   ::= type '*'
+///   ::= type '[' integral-literal ']'
 TypeAST *Parser::parseType() {
   TypeAST *type = nullptr;
   bool isVoid = false;
@@ -300,15 +398,92 @@ TypeAST *Parser::parseType() {
       type = BuiltinTypeAST::get(TypeAST::TI_Float);
       break;
 
+    case tok::Char:
+      ++CurPos;
+      type = BuiltinTypeAST::get(TypeAST::TI_Char);
+      break;
+
+    case tok::String:
+      ++CurPos;
+      type = BuiltinTypeAST::get(TypeAST::TI_String);
+      break;
+
     case tok::Void:
       ++CurPos;
       type = BuiltinTypeAST::get(TypeAST::TI_Void);
       isVoid = true;
       break;
 
+    case tok::Dot:
+    case tok::Identifier: {
+      Name *name = nullptr;
+      QualifiedName qualName;
+
+      if (CurPos == tok::Identifier) {
+        name = CurPos->getIdentifier();
+        ++CurPos;
+      }
+
+      qualName.push_back(name);
+
+      while (CurPos == tok::Dot) {
+        ++CurPos;
+
+        if (CurPos == tok::Identifier) {
+          name = CurPos->getIdentifier();
+        }
+
+        check(tok::Identifier);
+        qualName.push_back(name);
+      }
+
+      type = new QualifiedTypeAST(qualName);
+      break;
+    }
+
     default:
       getDiagnostics().report(CurPos.getLocation(), diag::ERR_InvalidType);
       return nullptr;
+  }
+
+  for (;;) {
+    switch (CurPos->getKind()) {
+      case tok::OpenBrace: {
+        if (isVoid) {
+          getDiagnostics().report(loc, diag::ERR_VoidAsNonPointer);
+          return nullptr;
+        }
+
+        ++CurPos;
+
+        int dim = 0;
+
+        if (CurPos == tok::IntNumber) {
+          dim = atoi(CurPos->getLiteral().data());
+        } else {
+          // [ expression ] will be parsed later in parseUnaryExpr (in other
+          // cases it's error)
+          --CurPos;
+          break;
+        }
+
+        check(tok::IntNumber);
+        check(tok::CloseBrace);
+
+        type = new ArrayTypeAST(type, dim);
+        continue;
+      }
+
+      case tok::Mul:
+        ++CurPos;
+        type = new PointerTypeAST(type, false);
+        continue;
+
+      default:
+        break;
+    }
+
+    break;
   }
 
   if (type == BuiltinTypeAST::get(TypeAST::TI_Void)) {
@@ -338,6 +513,12 @@ SymbolAST *Parser::parseFuncProto() {
   if (CurPos == tok::Identifier) {
     name = CurPos->getIdentifier();
     ++CurPos;
+  } else if (CurPos == tok::New) {
+    ++CurPos;
+    name = Name::New;
+  } else if (CurPos == tok::Delete) {
+    ++CurPos;
+    name = Name::Delete;
   } else {
     check(tok::Identifier);
   }
@@ -408,6 +589,10 @@ SymbolList Parser::parseFuncDecl() {
 /// decls
 ///  ::= func-decl
 ///  ::= decls func-decl
+///  ::= struct-decl
+///
+/// struct-decl
+///   ::= 'struct' identifier '{' decl-stmt * '}'
 SymbolList Parser::parseDecls() {
   SymbolList result;
 
@@ -420,6 +605,29 @@ SymbolList Parser::parseDecls() {
         tmp = parseFuncDecl();
         result.push_back(tmp.pop_back_val());
         continue;
+
+      case tok::Struct: {
+        ++CurPos;
+        Name *name = nullptr;
+
+        if (CurPos == tok::Identifier) {
+          name = CurPos->getIdentifier();
+        }
+
+        check(tok::Identifier);
+
+        check(tok::BlockStart);
+
+        // Structures don't allow any declarations except variables
+        while (CurPos != tok::BlockEnd) {
+          SymbolList tmp2 = parseDecl(true, true);
+          tmp.append(tmp2.begin(), tmp2.end());
+        }
+
+        check(tok::BlockEnd);
+        result.push_back(new StructDeclAST(loc, name, tmp));
+        continue;
+      }
 
       case tok::EndOfFile:
         break;
@@ -452,7 +660,7 @@ ModuleDeclAST *Parser::parseModule() {
 ///   ::= var-decl
 ///   ::= var-decls ',' var-decl
 /// decl-stmt ::= var-decls ';'
-SymbolList Parser::parseDecl(bool needSemicolon) {
+SymbolList Parser::parseDecl(bool needSemicolon, bool isClassMember) {
   SymbolList result;
 
   for (;;) {
@@ -471,11 +679,17 @@ SymbolList Parser::parseDecl(bool needSemicolon) {
       TypeAST *type = parseType();
 
       if (CurPos == tok::Assign) {
+        if (isa<ArrayTypeAST>(type) || isa<QualifiedTypeAST>(type)) {
+          getDiagnostics().report(CurPos.getLocation(),
+                                  diag::ERR_AggregateOrArrayInitializer);
+          return result;
+        }
+
         ++CurPos;
         value = parseAssignExpr();
       }
 
-      result.push_back(new VarDeclAST(loc, type, name, value));
+      result.push_back(new VarDeclAST(loc, type, name, value, isClassMember));
 
       if (CurPos != tok::Comma) {
         break;
@@ -538,7 +752,12 @@ StmtAST *Parser::parseStmt() {
     case tok::Identifier:
     case tok::IntNumber:
     case tok::FloatNumber:
-    case tok::OpenParen: {
+    case tok::OpenParen:
+    case tok::Delete:
+    case tok::Mul:
+    case tok::BitAnd:
+    case tok::New:
+    case tok::Dot: {
       ExprAST *expr = parseExpr();
       check(tok::Semicolon);
       return new ExprStmtAST(loc, expr);
@@ -558,9 +777,9 @@ StmtAST *Parser::parseStmt() {
       if (CurPos == tok::Else) {
         ++CurPos;
 
-        if (CurPos != tok::BlockStart) {
-          check(tok::BlockStart);
-        }
+      if (CurPos != tok::BlockStart) {
+        check(tok::BlockStart);
+      }
 
         elsePart = parseStmtAsBlock();
       }

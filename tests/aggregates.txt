@@ -1,0 +1,138 @@
+fn checkF(s: string, a: float, b: float) {
+  if a == b {
+    printString(s);
+    printString(" ");
+    printLn("Pass");
+  }
+  else {
+    printString(s);
+    printString(" ");
+    printLn("Fail");
+  }
+}
+
+fn checkS(s: string, a: string, b: string) {
+  if strCmp(a, b) == 0 {
+    printString(s);
+    printString(" ");
+    printLn("Pass");
+  }
+  else {
+    printString(s);
+    printString(" ");
+    printLn("Fail");
+  }
+}
+
+fn strCmp(str1: string, str2: string) : int {
+  let p1: string = str1;
+  let p2: string = str2;
+
+  while (*p1 && *p2) && (*p1 == *p2) {
+    ++p1;
+    ++p2;
+  }
+
+  return *p1 - *p2;
+}
+
+struct A {
+  a: int;
+  b: int;
+  c: float;
+}
+
+struct B {
+  a: int;
+  b: int;
+  c: float;
+  str: string;
+}
+
+struct C {
+  a: A;
+  b: B;
+}
+
+struct E {
+  a: A[2];
+}
+
+struct EE {
+  a: E[2][2];
+}
+
+fn main() : float {
+  {
+    printLn("aggregate tests");
+
+    let s: B;
+
+    s.a = 1;
+    s.b = 2;
+    s.c = 3.0;
+    s.str = "Hello";
+
+    checkF("s.a", s.a, 1);
+    checkF("s.b", s.b, 2);
+    checkF("s.c", s.c, 3);
+    checkS("s.str", s.str, "Hello");
+  }
+  printLn("");
+  {
+    printLn("compound aggregates tests");
+
+    let s: C;
+
+    s.a.a = 1;
+    s.a.b = 2;
+    s.a.c = 3.0;
+    s.b.a = 4;
+    s.b.b = 5;
+    s.b.c = 6.0;
+    s.b.str = "Hi";
+
+    checkF("s.a.a", s.a.a, 1);
+    checkF("s.a.b", s.a.b, 2);
+    checkF("s.a.c", s.a.c, 3);
+    checkF("s.b.a", s.b.a, 4);
+    checkF("s.b.b", s.b.b, 5);
+    checkF("s.b.c", s.b.c, 6);
+    checkS("s.b.str", s.b.str, "Hi");
+  }
+  printLn("");
+  {
+    printLn("arrays of aggregates tests");
+
+    let a: A[5];
+
+    a[0].a = 20;
+    a[0].b = 2;
+    a[0].c = 40;
+
+    checkF("a[0].a", a[0].a, 20);
+    checkF("a[0].b", a[0].b, 2);
+    checkF("a[0].c", a[0].c, 40);
+
+    let b: E[2];
+
+    b[0].a[1].a = 21;
+    b[0].a[1].b = 22;
+    b[0].a[1].c = 23;
+
+    checkF("b[0].a[1].a", b[0].a[1].a, 21);
+    checkF("b[0].a[1].b", b[0].a[1].b, 22);
+    checkF("b[0].a[1].c", b[0].a[1].c, 23);
+
+    checkF("++b[0].a[1].a", ++b[0].a[1].a, 22);
+    checkF("b[0].a[1].b++", b[0].a[1].b++, 22);
+
+    let e: EE[1];
+
+    e[0].a[0][1].a[0].a = 20;
+
+    checkF("++e[0].a[0][1].a[0].a", ++e[0].a[0][1].a[0].a, 21);
+  }
+  
+  return 0.0;
+}

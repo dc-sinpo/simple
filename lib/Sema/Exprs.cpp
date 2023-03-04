@@ -15,6 +15,15 @@ bool ExprAST::isLValue() {
   return false;
 }
 
+SymbolAST* ExprAST::getAggregate(Scope *) {
+  assert(0 && "ExprAST::getAggregaet should never be reached");
+  return nullptr;
+}
+
+bool ExprAST::canBeNull() {
+  return false;
+}
+
 // IntExprAST implementation
 bool IntExprAST::isTrue() {
   return Val != 0;
@@ -41,9 +50,147 @@ ExprAST* FloatExprAST::clone() {
   return new FloatExprAST(Loc, Val);
 }
 
+// StringExprAST implementation
+bool StringExprAST::isTrue() {
+  return true;
+}
+
+ExprAST* StringExprAST::semantic(Scope* ) {
+  return this;
+}
+
+ExprAST* StringExprAST::clone() {
+  return new StringExprAST(Loc, StringRef(Val));
+}
+
+// ProxyExprAST implementation
+ExprAST* ProxyExprAST::semantic(Scope* scope) {
+  // Make sure that it was used for expressions which can't change self during semantic
+  ExprAST* tmp = OriginalExpr->semantic(scope);
+  assert(tmp == OriginalExpr);
+  ExprType = OriginalExpr->ExprType;
+  return this;
+}
+
+ExprAST* ProxyExprAST::clone() {
+  return new ProxyExprAST(Loc, OriginalExpr);
+}
+
+bool NewExprAST::canBeNull() {
+  return true;
+}
+
+// NewExprAST implementation
+ExprAST* NewExprAST::semantic(Scope* scope) {
+  if (ExprType) {
+    return this;
+  }
+
+  // Perform semantic on NewType
+  NewType = NewType->semantic(scope);
+
+  // Check for array type
+  if (isa<ArrayTypeAST>(NewType) && !DynamicSize) {
+    // We convert resulted type to pointer type but still allocate as array 
+    ArrayTypeAST* arrayType = (ArrayTypeAST*)NewType;
+    ExprType = new PointerTypeAST(arrayType->Next, false);
+    ExprType = ExprType->semantic(scope);
+  } else {
+    // Result type is pointer to NewType
+    ExprType = new PointerTypeAST(NewType, false);
+    ExprType = ExprType->semantic(scope);
+  }
+
+  // Create SizeExpr as integral constant and wrap it with proxy expression
+  // because we need patch it with actual type's size during code generation
+  SizeExpr = new IntExprAST(Loc, 0);
+  ExprAST* proxy = new ProxyExprAST(Loc, SizeExpr);
+
+  if (DynamicSize) {
+    proxy = new BinaryExprAST(Loc, tok::Mul, DynamicSize, proxy);
+  }
+
+  // Create allocMem call with size of allocated type
+  ExprList args;
+  args.push_back(proxy);
+  CallExpr = new CallExprAST(Loc, new IdExprAST(Loc, Name::New), args);
+
+  // Perform semantic for just created call expression
+  CallExpr = CallExpr->semantic(scope);
+
+  return this;
+}
+
+ExprAST* NewExprAST::clone() {
+  ExprList exprs;
+  ExprList::iterator it = Args.begin();
+  ExprList::iterator end = Args.end();
+
+  for ( ; it != end; ++it) {
+    exprs.push_back((*it)->clone());
+  }
+
+  return new NewExprAST(Loc, NewType, DynamicSize, exprs);
+}
+
+// DeleteExprAST implementation
+ExprAST* DeleteExprAST::semantic(Scope* scope) {
+  if (DeleteCall) {
+    return this;
+  }
+
+  // Check semantic of expression to delete
+  Val = Val->semantic(scope);
+
+  // void value not allowed
+  if (!Val->ExprType || Val->ExprType->isVoid()) {
+    scope->report(Loc, diag::ERR_SemaCantDeleteVoid);
+    return nullptr;
+  }
+
+  // Type of the expression to delete should have pointer type
+  if (!isa<PointerTypeAST>(Val->ExprType)) {
+    scope->report(Loc, diag::ERR_SemaCantDeleteNonPointer);
+    return nullptr;
+  }
+
+  PointerTypeAST* ptrType = (PointerTypeAST*)Val->ExprType;
+
+  ExprAST* deleteArg = Val->clone();
+  ExprList args;
+
+  // Add argument for freeMem call
+  // Note: It can be Val or result of destructor's call
+  args.push_back(deleteArg);
+  
+  // Create freeMem call and check it's semantic
+  DeleteCall = new CallExprAST(Loc, new IdExprAST(Loc, Name::Delete), args);
+  DeleteCall = DeleteCall->semantic(scope);
+
+  ExprType = BuiltinTypeAST::get(TypeAST::TI_Void);
+
+  return this;
+}
+
+ExprAST* DeleteExprAST::clone() {
+  return new DeleteExprAST(Loc, Val->clone());
+}
+
 // IdExprAST implementation
 bool IdExprAST::isLValue() {
+  if (isa<PointerTypeAST>(ExprType)) {
+    return !((PointerTypeAST*)ExprType)->IsConstant;
+  }
+
   return true;
+}
+
+SymbolAST* IdExprAST::getAggregate(Scope *) {
+  return ThisSym;
+}
+
+bool IdExprAST::canBeNull() {
+  return ThisSym->canBeNull();
 }
 
 ExprAST* IdExprAST::semantic(Scope* scope) {
@@ -73,6 +220,307 @@ ExprAST* IdExprAST::clone() {
   return new IdExprAST(Loc, Val);
 }
 
+// IndexExprAST implementation
+bool IndexExprAST::isLValue() {
+  if (Left->ExprType->isString()) {
+    return false;
+  }
+
+  return true;
+}
+
+SymbolAST* IndexExprAST::getAggregate(Scope *scope) {
+  if (!ExprType->isAggregate()) {
+    scope->report(Loc, diag::ERR_SemaNonAggregateDotOperand);
+    return nullptr;
+  }
+
+  return ExprType->getSymbol();
+}
+
+bool IndexExprAST::canBeNull() {
+  if (isa<PointerTypeAST>(ExprType)) {
+    return true;
+  }
+
+  return false;
+}
+
+ExprAST* IndexExprAST::semantic(Scope* scope) {
+  if (ExprType) {
+    return this;
+  }
+
+  // Perform semantic on left and right operand
+  Left = Left->semantic(scope);
+  Right = Right->semantic(scope);
+
+  // Indexed value should have array, pointer or string types
+  if (Left->ExprType && !isa<ArrayTypeAST>(Left->ExprType) && !isa<PointerTypeAST>(Left->ExprType) &&
+    !Left->ExprType->isString()) {
+    scope->report(Loc, diag::ERR_SemaNonIndexableType);
+    return nullptr;
+  }
+
+  // Cast index if needed
+  if (!Right->ExprType->isInt()) {
+    Right = new CastExprAST(Right->Loc, Right, BuiltinTypeAST::get(TypeAST::TI_Int));
+    Right = Right->semantic(scope);
+  }
+
+  // Set result type
+  if (isa<ArrayTypeAST>(Left->ExprType)) {
+    ExprType = ((ArrayTypeAST*)Left->ExprType)->Next;
+  } else if (isa<PointerTypeAST>(Left->ExprType)) {
+    ExprType = ((PointerTypeAST*)Left->ExprType)->Next;
+  } else {
+    ExprType = BuiltinTypeAST::get(TypeAST::TI_Char);
+  }
+
+  return this;
+}
+
+ExprAST* IndexExprAST::clone() {
+  return new IndexExprAST(Loc, Left->clone(), Right->clone());
+}
+
+// MemberAccessExprAST implementation
+bool MemberAccessExprAST::isLValue() {
+  return true;
+}
+
+SymbolAST* MemberAccessExprAST::getAggregate(Scope *) {
+  return ThisSym;
+}
+
+bool MemberAccessExprAST::canBeNull() {
+  return Val->canBeNull();
+}
+
+ExprAST* MemberAccessExprAST::semantic(Scope* scope) {
+  if (SemaDone) {
+    return this;
+  }
+
+  Val = Val->semantic(scope);
+
+  // Special case for module name
+  if (isa<IdExprAST>(Val) && !((IdExprAST*)Val)->Val) {
+    SymbolAST* moduleSym = scope->find(0);
+    assert(moduleSym);
+    SymbolAST* thisSym = moduleSym->find(MemberName);
+
+    if (!thisSym) {
+      scope->report(Loc, diag::ERR_SemaUndefinedMember, MemberName->Id);
+      return nullptr;
+    }
+
+    // We replace MemberAccessExprAST with IdExprAST with preset values
+    IdExprAST* newExpr = new IdExprAST(Loc, MemberName);
+
+    newExpr->ExprType = thisSym->getType();
+
+    newExpr->ThisSym = thisSym;
+    delete this;
+    return newExpr;
+  }
+  
+  if (!Val->ExprType) {
+    scope->report(Loc, diag::ERR_SemaInvalidOperandForMemberAccess);
+    return nullptr;
+  }
+
+  // If Val is pointer to aggregate type then we should add deref. We treat
+  // agg->a same as agg.a
+  if (isa<PointerTypeAST>(Val->ExprType) && ((PointerTypeAST*)Val->ExprType)->Next->isAggregate()) {
+    Val = new DerefExprAST(Loc, Val);
+    Val = Val->semantic(scope);
+  }
+
+  // Val should be lvalue
+  if (!Val->isLValue()) {
+    scope->report(Loc, diag::ERR_SemaNonLValueForMemberAccess);
+    return nullptr;
+  }
+
+  SymbolAST* aggSym = Val->getAggregate(scope);
+
+  // We disable A.b usage. It should be a.b where a is instance of A
+  if (isa<IdExprAST>(Val) && aggSym && aggSym->isAggregate()) {
+    // Check special case for base class function or variable
+    scope->report(Loc, diag::ERR_SemaMemberAccessOnAggregateType);
+    return nullptr;
+  }
+  
+  if (!aggSym || !aggSym->getType()->isAggregate()) {
+    scope->report(Loc, diag::ERR_SemaNonAggregateDotOperand);
+    return nullptr;
+  }
+
+  if (!aggSym->isAggregate()) {
+    aggSym = aggSym->getType()->getSymbol();
+  }
+
+  ThisSym = aggSym->find(MemberName);
+  ThisAggr = aggSym;
+
+  // We should have symbol or it's error  
+  if (!ThisSym) {
+    scope->report(Loc, diag::ERR_SemaUndefinedMember, MemberName->Id);
+    return nullptr;
+  }
+  
+  // We disallow a.A where A is aggregate type
+  if (ThisSym->isAggregate()) {
+    scope->report(Loc, diag::ERR_SemaAggregateTypeAsMemberAccessOperand);
+    return nullptr;
+  }
+
+  ExprType = ThisSym->getType();
+
+  SemaDone = true;
+
+  return this;
+}
+
+ExprAST* MemberAccessExprAST::clone() {
+  return new MemberAccessExprAST(Loc, Val->clone(), MemberName);
+}
+
+// PointerAccessExprAST implementation
+bool PointerAccessExprAST::isLValue() {
+  return true;
+}
+
+ExprAST* PointerAccessExprAST::semantic(Scope* scope) {
+  /// Rewrite expr->member to (*expr).member, perform semantic on it and delete
+  // this
+  ExprAST* newExpr = new DerefExprAST(Loc, Val);
+  newExpr = new MemberAccessExprAST(Loc, newExpr, MemberName);
+  Val = nullptr;
+  delete this;
+  return newExpr->semantic(scope);
+}
+
+ExprAST* PointerAccessExprAST::clone() {
+  return new PointerAccessExprAST(Loc, Val->clone(), MemberName);
+}
+
+// DerefExprAST implementation
+bool DerefExprAST::isLValue() {
+  return true;
+}
+
+SymbolAST* DerefExprAST::getAggregate(Scope *scope) {
+  // Check for aggregate
+  if (!ExprType->isAggregate()) {
+    scope->report(Loc, diag::ERR_SemaNonAggregateDotOperand);
+    return nullptr;
+  }
+
+  return ExprType->getSymbol();
+}
+
+bool DerefExprAST::canBeNull() {
+  return true;
+}
+
+ExprAST* DerefExprAST::semantic(Scope* scope) {
+  if (ExprType) {
+    return this;
+  }
+
+  // Check semantic for nested value
+  Val = Val->semantic(scope);
+
+  // Check for address expression
+  if (isa<AddressOfExprAST>(Val)) {
+    // Remove both dereference and address and delete this
+    ExprAST* result = ((AddressOfExprAST*)Val)->Val->clone();
+    delete this;
+    return result->semantic(scope);
+  }
+
+  // Check for valid pointer type
+  if (Val->ExprType) {
+    if (Val->ExprType->isString()) {
+      if (Val->isConst()) {
+        scope->report(Loc, diag::ERR_SemaConstStringDeRef);
+        return nullptr;
+      }
+
+      ExprType = BuiltinTypeAST::get(TypeAST::TI_Char);
+      return this;
+    } else if (!isa<PointerTypeAST>(Val->ExprType)) {
+      scope->report(Loc, diag::ERR_SemaUnDereferencableType);
+      return nullptr;
+    }
+  } else {
+    scope->report(Loc, diag::ERR_SemaUnDereferencableType);
+    return nullptr;
+  }
+
+  ExprType = ((PointerTypeAST*)Val->ExprType)->Next;
+  return this;
+}
+
+ExprAST* DerefExprAST::clone() {
+  return new DerefExprAST(Loc, Val->clone());
+}
+
+// AddressOfExprAST implementation
+SymbolAST* AddressOfExprAST::getAggregate(Scope *scope) {
+  return Val->getAggregate(scope);
+}
+
+bool AddressOfExprAST::canBeNull() {
+  if (isa<IdExprAST>(Val) && !Val->canBeNull()) {
+    return false;
+  }
+
+  return true;
+}
+
+ExprAST* AddressOfExprAST::semantic(Scope* scope) {
+  if (ExprType) {
+    return this;
+  }
+
+  // Check semantic for nested value
+  Val = Val->semantic(scope);
+
+  // We need valid type for nested value
+  if (!Val->ExprType) {
+    scope->report(Loc, diag::ERR_SemaAddressExpressionNoType);
+    return nullptr;
+  }
+
+  // Check for dereference
+  if (isa<DerefExprAST>(Val)) {
+    // Remove both dereference and address expressions, perform semantic and
+    // delete this
+    ExprAST* result = ((DerefExprAST*)Val)->Val->clone();
+    delete this;
+    return result->semantic(scope);
+  }
+
+  // Address expression should always be lvalue
+  if (!Val->isLValue()) {
+    scope->report(Loc, diag::ERR_SemaAddressOfNonLValue);
+    return nullptr;
+  }
+
+  // Set expression's type as pointer to type of the nested value
+  ExprType = new PointerTypeAST(Val->ExprType, false);
+  ExprType = ExprType->semantic(scope);
+
+  return this;
+}
+
+ExprAST* AddressOfExprAST::clone() {
+  return new AddressOfExprAST(Loc, Val->clone());
+}
+
 // CastExprAST implementation
 ExprAST* CastExprAST::semantic(Scope* scope) {
   if (SemaDone) {
@@ -98,6 +546,18 @@ ExprAST* CastExprAST::semantic(Scope* scope) {
   // Disallow cast from and to function type
   if (isa<FuncTypeAST>(ExprType) || isa<FuncTypeAST>(Val->ExprType)) {
     scope->report(Loc, diag::ERR_SemaFunctionInCast);
+    return nullptr;
+  }
+
+  // Disallow cast to array type
+  if (isa<ArrayTypeAST>(ExprType)) {
+    scope->report(Loc, diag::ERR_SemaArrayInCast);
+    return nullptr;
+  }
+
+  // Check for pointer and it's conversion
+  if (isa<PointerTypeAST>(ExprType) && !Val->ExprType->implicitConvertTo(ExprType)) {
+    scope->report(Loc, diag::ERR_SemaIncompatiblePointerTypes);
     return nullptr;
   }
 
@@ -132,6 +592,29 @@ ExprAST* UnaryExprAST::semantic(Scope* scope) {
     return nullptr;
   }
 
+  // We disallow aggregates
+  if (Val->ExprType->isAggregate()) {
+    scope->report(Loc, diag::ERR_SemaAggregateAsExpression);
+    return nullptr;
+  }
+
+  // strings (except ++/--)
+  if (Val->ExprType->isString() && (Op != tok::MinusMinus && Op != tok::PlusPlus)) {
+    scope->report(Loc, diag::ERR_SemaInvalidUnaryExpressionForString);
+    return nullptr;
+  }
+
+  // arrays 
+  if (isa<ArrayTypeAST>(Val->ExprType)) {
+    scope->report(Loc, diag::ERR_SemaInvalidUnaryExpressionForArray);
+    return nullptr;
+  }
+
+  // pointers (except ++/--)
+  if (isa<PointerTypeAST>(Val->ExprType) && (Op != tok::MinusMinus && Op != tok::PlusPlus)) {
+    scope->report(Loc, diag::ERR_SemaInvalidUnaryExpressionForPointer);
+    return nullptr;
+  }
 
   if (Val->ExprType->isBool() && (Op == tok::Plus || Op == tok::Minus)) {
     scope->report(Loc, diag::ERR_SemaInvalidBoolForUnaryOperands);
@@ -174,22 +657,39 @@ ExprAST* UnaryExprAST::semantic(Scope* scope) {
       }
 
     case tok::PlusPlus:
-    case tok::MinusMinus: {
-        // We allow ++ or -- only for IdExprAST as operand
-        // Note: ++ ++ id not allowed too
-        if (!Val->ExprType->isInt() || !Val->isLValue()) {
-          scope->report(Loc, diag::ERR_SemaInvalidPostfixPrefixOperand);
-          return nullptr;
+    case tok::MinusMinus:
+      // We allow ++ or -- only for IdExprAST or IndexExprAST as operand
+      // Note: ++ ++ id not allowed too
+      if ((!Val->ExprType->isInt() && !isa<PointerTypeAST>(Val->ExprType) && 
+        !Val->ExprType->isString()) || !Val->isLValue()) {
+        scope->report(Loc, diag::ERR_SemaInvalidPostfixPrefixOperand);
+        return nullptr;
+      } else {
+        // We have special case for IndexExprAST and MemberAccessAST operand
+        if (isa<IndexExprAST>(Val) || isa<MemberAccessExprAST>(Val) || Val->ExprType->isString()) {
+          ExprType = Val->ExprType;
+          return this;
         }
-        
-        // We need to convert ++ id or -- id to id = id + 1 or id = id + -1
-        ExprAST* val = Val;
-        ExprAST* valCopy = Val->clone();
-        result = new BinaryExprAST(Val->Loc, tok::Assign, 
-          val,
-          new BinaryExprAST(Val->Loc, tok::Plus,
-            valCopy, 
-            new IntExprAST(Val->Loc, (Op == tok::PlusPlus) ? 1 : -1)));
+
+        if (isa<PointerTypeAST>(Val->ExprType)) {
+          // We need to convert ++ ptr or -- ptr to ptr = &ptr[1] or ptr = &ptr[-1]
+          ExprAST* val = Val;
+          ExprAST* valCopy = Val->clone();
+          result = new BinaryExprAST(Val->Loc, tok::Assign,
+            val,
+            new AddressOfExprAST(Val->Loc,
+              new IndexExprAST(Val->Loc, valCopy, 
+                new IntExprAST(Val->Loc, (Op == tok::PlusPlus) ? 1 : -1))));
+        } else {
+          // We need to convert ++ id or -- id to id = id + 1 or id = id + -1
+          ExprAST* val = Val;
+          ExprAST* valCopy = Val->clone();
+          result = new BinaryExprAST(Val->Loc, tok::Assign, 
+            val,
+            new BinaryExprAST(Val->Loc, tok::Plus,
+              valCopy, 
+             new IntExprAST(Val->Loc, (Op == tok::PlusPlus) ? 1 : -1)));
+        }
       }
       break;
 
@@ -233,7 +733,8 @@ ExprAST* BinaryExprAST::semantic(Scope* scope) {
   // 1 operand
   if (Op == tok::PlusPlus || Op == tok::MinusMinus) {
     // We allow only id of int type as operand of ++/-- operator
-    if (!LeftExpr->isLValue() || !LeftExpr->ExprType->isInt()) {
+    if (!LeftExpr->isLValue() || (!LeftExpr->ExprType->isInt() && 
+      !isa<PointerTypeAST>(LeftExpr->ExprType) && !LeftExpr->ExprType->isString())) {
       scope->report(Loc, diag::ERR_SemaInvalidPostfixPrefixOperand);
       return nullptr;
     }
@@ -249,6 +750,12 @@ ExprAST* BinaryExprAST::semantic(Scope* scope) {
   // Check for validity of operands
   if (!LeftExpr->ExprType || !RightExpr->ExprType) {
     scope->report(Loc, diag::ERR_SemaUntypedBinaryExpressionOperands);
+    return nullptr;
+  }
+
+  // Disallow aggregates in binary expressions
+  if (LeftExpr->ExprType->isAggregate() || RightExpr->ExprType->isAggregate()) {
+    scope->report(Loc, diag::ERR_SemaAggregateAsExpression);
     return nullptr;
   }
 
@@ -274,8 +781,23 @@ ExprAST* BinaryExprAST::semantic(Scope* scope) {
     case tok::GreaterEqual:
     case tok::Equal:
     case tok::NotEqual:
+      // Disable string, pointers and arrays in comparisons
+      if (LeftExpr->ExprType->isString() || isa<PointerTypeAST>(LeftExpr->ExprType) || 
+        isa<ArrayTypeAST>(LeftExpr->ExprType) || RightExpr->ExprType->isString() ||
+        isa<PointerTypeAST>(RightExpr->ExprType) || isa<ArrayTypeAST>(RightExpr->ExprType)) {
+        scope->report(Loc, diag::ERR_SemaInvalidTypeForComparison);
+        return nullptr;
+      }
+
       // If left operand is bool then we should convert it to an int
       if (LeftExpr->ExprType->isBool()) {
+        LeftExpr = new CastExprAST(LeftExpr->Loc, LeftExpr, 
+          BuiltinTypeAST::get(TypeAST::TI_Int));
+        LeftExpr = LeftExpr->semantic(scope);
+      }
+
+      // If left operand is char then we should convert it to an int
+      if (LeftExpr->ExprType->isChar()) {
         LeftExpr = new CastExprAST(LeftExpr->Loc, LeftExpr, 
           BuiltinTypeAST::get(TypeAST::TI_Int));
         LeftExpr = LeftExpr->semantic(scope);
@@ -323,10 +845,27 @@ ExprAST* BinaryExprAST::semantic(Scope* scope) {
 
   // = operator is special case with IdExprAST as left part. Check it
   if (Op == tok::Assign) {
-    // Perform cast on right operand if needed
-    if (!LeftExpr->ExprType->equal(RightExpr->ExprType)) {
-      RightExpr = new CastExprAST(RightExpr->Loc, RightExpr, LeftExpr->ExprType);
-      RightExpr = RightExpr->semantic(scope);
+    // if resulted type is pointer then check right operand
+    if (isa<PointerTypeAST>(ExprType)) {
+      // Check for constant integral 0 value
+      if (RightExpr->isIntConst() && ((IntExprAST*)RightExpr)->Val != 0) {
+        scope->report(Loc, diag::ERR_SemaPointerInitialization);
+        return nullptr;
+      // Check for right operand compatibility
+      } else if (!RightExpr->ExprType->implicitConvertTo(ExprType)) {
+        scope->report(Loc, diag::ERR_SemaPointerInitialization);
+        return nullptr;
+      } else {
+        // Generate cast
+        RightExpr = new CastExprAST(RightExpr->Loc, RightExpr, LeftExpr->ExprType);
+        RightExpr = RightExpr->semantic(scope);
+      }
+    } else {
+      // Perform cast on right operand if needed
+      if (!LeftExpr->ExprType->equal(RightExpr->ExprType)) {
+        RightExpr = new CastExprAST(RightExpr->Loc, RightExpr, LeftExpr->ExprType);
+        RightExpr = RightExpr->semantic(scope);
+      }
     }
 
     // Check for lvalue of left operand
@@ -337,6 +876,41 @@ ExprAST* BinaryExprAST::semantic(Scope* scope) {
 
     // It's valid expression. Return this
     return this;
+  }
+
+  // Disable string, arrays and pointers from usage in expressions
+  if (isa<ArrayTypeAST>(LeftExpr->ExprType) || isa<ArrayTypeAST>(RightExpr->ExprType)) {
+    scope->report(Loc, diag::ERR_SemaCantUseArrayInBinaryExpression);
+    return nullptr;
+  }
+
+  if (isa<PointerTypeAST>(LeftExpr->ExprType) || LeftExpr->ExprType->isString() || 
+    isa<PointerTypeAST>(RightExpr->ExprType) || RightExpr->ExprType->isString()) {
+    if (Op != tok::Plus && Op != tok::Minus) {
+      scope->report(Loc, diag::ERR_SemaPointerOrStringInBinaryExpression);
+      return nullptr;
+    }
+
+    if (isa<PointerTypeAST>(LeftExpr->ExprType) || LeftExpr->ExprType->isString()) {
+      if (!RightExpr->ExprType->isInt()) {
+        scope->report(Loc, diag::ERR_SemaPointerArithmeticsForNonInt);
+        return nullptr;
+      }
+
+      ExprType = LeftExpr->ExprType;
+      return this;
+    } else {
+      scope->report(Loc, diag::ERR_SemaPointerArithmeticsForNonInt);
+      return nullptr;
+    }
+  }
+
+  // If left operand is char convert it to an int
+  if (LeftExpr->ExprType->isChar()) {
+    LeftExpr = new CastExprAST(LeftExpr->Loc, LeftExpr, 
+      BuiltinTypeAST::get(TypeAST::TI_Int));
+    LeftExpr = LeftExpr->semantic(scope);
+    ExprType = LeftExpr->ExprType;
   }
 
   // Perform cast on right operand if needed
@@ -488,7 +1062,7 @@ static SymbolAST* resolveFunctionCall(Scope *scope, SymbolAST* func, CallExprAST
     return func;
   }
 
-  return nullptr;
+    return nullptr;
 }
 
 ExprAST* CallExprAST::semantic(Scope* scope) {

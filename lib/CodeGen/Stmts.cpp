@@ -25,10 +25,10 @@ llvm::Value* BlockStmtAST::generatePartialCode(SLContext& Context,
   LandingPad->BreakLoc = parent->BreakLoc;
   LandingPad->ContinueLoc = parent->ContinueLoc;
   LandingPad->ReturnLoc = parent->ReturnLoc;
-
+  
   // Create new block for FalltrhoughLoc
   LandingPad->FallthroughLoc = BasicBlock::Create(getGlobalContext(), "block");
-
+  
   // Generate code for every nested statement
   for (; it != end; ++it) {
     // Save FallthroughLoc
@@ -56,7 +56,7 @@ llvm::Value* BlockStmtAST::generatePartialCode(SLContext& Context,
 
   // If last current block doesn't have terminator we should add jump
   // to fall through location
-  if (!Context.TheBuilder->GetInsertBlock()->getTerminator()) {  
+  if (!Context.TheBuilder->GetInsertBlock()->getTerminator()) {
     Context.TheBuilder->CreateBr(parent->FallthroughLoc);
     parent->FallthroughLoc = nullptr;
     

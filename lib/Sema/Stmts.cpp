@@ -58,7 +58,7 @@ StmtAST* BlockStmtAST::doSemantic(Scope* scope) {
   ThisBlock = new ScopeSymbol(Loc, SymbolAST::SI_Block, nullptr);
   Scope* s = scope->push((ScopeSymbol*)ThisBlock);
   
-  // Create landing pad
+  // Create landing pad 
   LandingPad = new LandingPadAST(s->LandingPad);
   LandingPad->OwnerBlock = this;
   s->LandingPad = LandingPad;

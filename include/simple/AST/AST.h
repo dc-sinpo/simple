@@ -28,7 +28,13 @@ struct TypeAST {
     TI_Bool,     ///< boolean type
     TI_Int,      ///< integral type
     TI_Float,    ///< floating point type
-    TI_Function  ///< function type
+    TI_Char,     ///< character type
+    TI_String,   ///< string type
+    TI_Pointer,  ///< pointer type
+    TI_Array,    ///< array type
+    TI_Struct,   ///< structure type
+    TI_Function, ///< function type
+    TI_Qualified ///< qualified name type
   };
 
   /// Constructor
@@ -44,6 +50,14 @@ struct TypeAST {
   virtual ~TypeAST() {
   }
 
+  /// Check is it string type
+  bool isString() {
+    return TypeKind == TI_String;
+  }
+  /// Check is it character type
+  bool isChar() {
+    return TypeKind == TI_Char;
+  }
   /// Check is it integral type
   bool isInt() {
     return TypeKind == TI_Int;
@@ -60,6 +74,10 @@ struct TypeAST {
   bool isVoid() {
     return TypeKind == TI_Void;
   }
+  /// Check is it aggregate type
+  bool isAggregate() {
+    return TypeKind == TI_Struct;
+  }
 
   /// Perform semantic analysis on type
   /// \param[in] scope - current scope
@@ -74,6 +92,9 @@ struct TypeAST {
   ///   two types have same decoration name then they are same)
   /// \param[in] output - resulted buffer
   virtual void toMangleBuffer(llvm::raw_ostream& output) = 0;
+  /// Get SymbolAST associated with this type (only valid for ClassTypeAST and
+  ///   StructTypeAST)
+  virtual SymbolAST* getSymbol();
   /// Calculate mangle name for this type
   void calcMangle();
 
@@ -96,11 +117,21 @@ struct ExprAST {
   enum ExprId {
     EI_Int,           ///< integral constant
     EI_Float,         ///< floating point constant
+    EI_Char,          ///< character constant
+    EI_String,        ///< string constant
+    EI_Proxy,         ///< proxy expression
     EI_Id,            ///< identifier expression
     EI_Cast,          ///< cast expression
+    EI_Index,         ///< indexing expression
+    EI_MemberAccess,  ///< dot member access expression
+    EI_PointerAccess, ///< member access expression through pointer
+    EI_Deref,         ///< dereference expression
+    EI_AddressOf,     ///< address expression
     EI_Unary,         ///< unary expression
     EI_Binary,        ///< binary expression
     EI_Call,          ///< call expression
+    EI_New,           ///< new expression
+    EI_Delete,        ///< delete expression
     EI_Cond           ///< conditional expression
   };
 
@@ -120,15 +151,20 @@ struct ExprAST {
 
   /// Check is it integral constant
   bool isIntConst() { return ExprKind == EI_Int; }
-  /// Check is it constant expression (integral, floating point)
+  /// Check is it constant expression (integral, floating point or string
+  ///   constants)
   bool isConst() {
-    return ExprKind == EI_Int || ExprKind == EI_Float;
+    return ExprKind == EI_Int || ExprKind == EI_Float || ExprKind == EI_String;
   }
 
   /// Check is constant expression has true value
   virtual bool isTrue();
   /// Check is it lvalue expression
   virtual bool isLValue();
+  /// Get SymbolAST of aggregate for this expression
+  virtual SymbolAST *getAggregate(Scope *scope);
+  /// Check can value be null or not
+  virtual bool canBeNull();
   /// Perform semantic analysis on expression
   /// \param[in] scope - current scope
   /// \return Expression after semantic analysis (probably new expression)
@@ -219,6 +255,7 @@ struct SymbolAST {
   /// Symbol's identifier
   enum SymbolId {
     SI_Variable,    ///< variable declaration
+    SI_Struct,      ///< structure declaration
     SI_Function,    ///< function declaration
     SI_Module,      ///< module declaration
     SI_Parameter,   ///< function's parameter declaration
@@ -239,7 +276,13 @@ struct SymbolAST {
 
   /// Destructor
   virtual ~SymbolAST() {}
+
+  bool isAggregate() {
+    return SymbolKind == SI_Struct;
+  }
   
+  /// Check need this symbol this value (true - class/struct members)
+  virtual bool needThis();
   /// Get symbol's type
   virtual TypeAST *getType();
   /// Perform 1st stage of semantic analysis (resolve symbol names)
@@ -285,6 +328,13 @@ struct SymbolAST {
   /// \note This is working function which should be implemented in derived
   ///   classes (should never be called directly except in semantic5 function)
   virtual void doSemantic5(Scope *scope);
+  /// Check does this symbol contain variable of \c type
+  /// \note It help determine circular references
+  virtual bool contain(TypeAST *type);
+  /// Check can this symbol be null
+  /// \note It should return true only for variables with pointer types (except
+  ///   special compiler generated variables 'this' and 'super')
+  virtual bool canBeNull();
 
   /// Generate code for symbol's value
   /// \param[in] Context - code generation's context
@@ -325,7 +375,9 @@ struct BuiltinTypeAST : TypeAST {
     return T->TypeKind == TI_Void ||
       T->TypeKind == TI_Bool ||
       T->TypeKind == TI_Int ||
-      T->TypeKind == TI_Float;
+      T->TypeKind == TI_Float ||
+      T->TypeKind == TI_Char ||
+      T->TypeKind == TI_String;
   }
   
 private:
@@ -334,9 +386,82 @@ private:
   }
 };
 
+/// AST node for array type
+struct ArrayTypeAST : TypeAST {
+  /// Constructor
+  /// \param[in] next - next type in the list
+  /// \param[in] dim - array's dimension
+  ArrayTypeAST(TypeAST* next, int dim)
+    : TypeAST(TI_Array),
+      Next(next),
+      Dim(dim) {
+  }
+
+  TypeAST* semantic(Scope* scope);
+  bool implicitConvertTo(TypeAST* newType);
+  void toMangleBuffer(llvm::raw_ostream& output);
+
+  llvm::Type* getType();
+
+  static bool classof(const TypeAST *T) {
+    return T->TypeKind == TI_Array;
+  }
+
+  TypeAST* Next; ///< Next type in the list
+  int Dim; ///< Array's dimension
+};
+
+/// AST node for pointer type
+struct PointerTypeAST : TypeAST {
+  /// Constructor
+  /// \param[in] next - next type in the list
+  /// \param[in] isConst - true - if value is constant and can't be changed
+  PointerTypeAST(TypeAST* next, bool isConst)
+    : TypeAST(TI_Pointer),
+      Next(next),
+      IsConstant(isConst) {
+  }
+
+  TypeAST* semantic(Scope* scope);
+  bool implicitConvertTo(TypeAST* newType);
+  void toMangleBuffer(llvm::raw_ostream& output);
+
+  llvm::Type* getType();
+
+  static bool classof(const TypeAST *T) {
+    return T->TypeKind == TI_Pointer;
+  }
+
+  TypeAST* Next; ///< Next type in the list
+  bool IsConstant; ///< true - if value is constant and can't be changed
+};
+
 void mangleAggregateName(llvm::raw_ostream& output, SymbolAST* thisSym);
 llvm::Value* promoteToBool(llvm::Value* val, TypeAST* type, llvm::IRBuilder< >& builder);
 llvm::ConstantInt* getConstInt(uint64_t value);
+
+/// AST node for structure type
+struct StructTypeAST : TypeAST {
+  /// Constructor
+  /// \param[in] thisDecl - structure declaration
+  StructTypeAST(SymbolAST* thisDecl)
+    : TypeAST(TI_Struct),
+      ThisDecl(thisDecl) {
+  }
+
+  TypeAST* semantic(Scope* scope);
+  bool implicitConvertTo(TypeAST* newType);
+  void toMangleBuffer(llvm::raw_ostream& output);
+  SymbolAST* getSymbol();
+
+  llvm::Type* getType();
+
+  static bool classof(const TypeAST *T) {
+    return T->TypeKind == TI_Struct;
+  }
+
+  SymbolAST* ThisDecl; ///< Structure declaration
+};
 
 /// AST node for function parameter
 struct ParameterAST {
@@ -394,6 +519,33 @@ struct FuncTypeAST : TypeAST {
   ParameterList Params; ///< List of function's parameters
 };
 
+/// Qualified name
+typedef llvm::SmallVector< Name*, 4 > QualifiedName;
+
+/// AST node for type with qualified name
+/// \note This is temporary type and will be replaced with StructTypeAST or
+///   ClassTypeAST after semantic analysis
+struct QualifiedTypeAST : TypeAST {
+  /// Constructor
+  /// \param[in] qualName - qualified name
+  QualifiedTypeAST(const QualifiedName& qualName)
+    : TypeAST(TI_Qualified),
+      QualName(qualName) {
+  }
+
+  TypeAST* semantic(Scope* scope);
+  bool implicitConvertTo(TypeAST* newType);
+  void toMangleBuffer(llvm::raw_ostream& output);
+
+  llvm::Type* getType();
+
+  static bool classof(const TypeAST *T) {
+    return T->TypeKind == TI_Qualified;
+  }
+
+  QualifiedName QualName; ///< Qualified name
+};
+
 /// AST node for integral constant
 struct IntExprAST : ExprAST {
   /// Constructor
@@ -440,6 +592,126 @@ struct FloatExprAST : ExprAST {
   double Val; ///< Stored value
 };
 
+/// AST node for string constant
+struct StringExprAST : ExprAST {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] str - stored value
+  StringExprAST(llvm::SMLoc loc, llvm::StringRef str)
+    : ExprAST(loc, EI_String, BuiltinTypeAST::get(TypeAST::TI_String)),
+      Val(llvm::StringRef(str)) {
+  }
+
+  bool isTrue();
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_String;
+  }
+
+  llvm::SmallString< 32 > Val; ///< Stored value
+};
+
+/// AST node for proxy expression
+/// \note Some expressions can copy inner expressions during semantic analysis,
+///   this node prevent it. It will copy self but original expression will be same 
+struct ProxyExprAST : ExprAST {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] orig - expression to protect
+  ProxyExprAST(llvm::SMLoc loc, ExprAST *orig)
+    : ExprAST(loc, EI_Proxy),
+      OriginalExpr(orig) {
+  }
+
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_Proxy;
+  }
+
+  ExprAST* OriginalExpr; ///< Protected expression
+};
+
+/// AST node for new expression
+struct NewExprAST : ExprAST {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] type - type to allocate
+  /// \param[in] dynamicSize - size of dynamic array
+  /// \param[in] args - arguments for constructor
+  NewExprAST(llvm::SMLoc loc, TypeAST *type, ExprAST *dynamicSize,
+    const ExprList& args)
+    : ExprAST(loc, EI_New),
+      NewType(type),
+      Args(args),
+      CallExpr(nullptr),
+      DynamicSize(dynamicSize),
+      SizeExpr(nullptr),
+      NeedCast(true) {
+  }
+
+  /// Destructor
+  ~NewExprAST() {
+    // We don't need clear Args and DynamicSize because CallExpr will handle it
+    delete CallExpr;
+    delete SizeExpr;
+  }
+
+  bool canBeNull();
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_New;
+  }
+
+  TypeAST* NewType; ///< Type to allocate
+  ExprList Args; ///< Arguments for constructor
+  ExprAST* CallExpr; ///< allocMem function's call
+  ExprAST* DynamicSize; ///< Size of dynamic array
+  IntExprAST* SizeExpr; ///< Expression with size of the type to allocate
+  bool NeedCast; ///< true - if cast shold be performed after allocation
+};
+
+/// AST node for delete expression
+struct DeleteExprAST : ExprAST {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] val - expression to delete
+  DeleteExprAST(llvm::SMLoc loc, ExprAST *val)
+    : ExprAST(loc, EI_Delete),
+      Val(val),
+      DeleteCall(nullptr) {
+  }
+
+  /// Destructor
+  ~DeleteExprAST() {
+    delete Val;
+    delete DeleteCall;
+  }
+
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_Delete;
+  }
+
+  ExprAST* Val; ///< Expression to delete
+  ExprAST* DeleteCall; ///< freeMem function's call
+};
+
 /// AST type for identifier expression
 struct IdExprAST : ExprAST {
   /// Constructor
@@ -452,6 +724,8 @@ struct IdExprAST : ExprAST {
   }
 
   bool isLValue();
+  SymbolAST* getAggregate(Scope *scope);
+  bool canBeNull();
   ExprAST* semantic(Scope* scope);
   ExprAST* clone();
 
@@ -464,6 +738,171 @@ struct IdExprAST : ExprAST {
 
   Name* Val; ///< Identifier's name
   SymbolAST* ThisSym; ///< Symbol for identifier (only valid after semantic pass)
+};
+
+/// AST node for index expression
+struct IndexExprAST : ExprAST {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] left - indexed value
+  /// \param[in] right - index
+  IndexExprAST(llvm::SMLoc loc, ExprAST *left, ExprAST *right)
+    : ExprAST(loc, EI_Index),
+      Left(left),
+      Right(right) {
+  }
+
+  /// Destructor
+  ~IndexExprAST() {
+    delete Left;
+    delete Right;
+  }
+
+  bool isLValue();
+  SymbolAST* getAggregate(Scope *scope);
+  bool canBeNull();
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getLValue(SLContext& Context);
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_Index;
+  }
+
+  ExprAST* Left; ///< Indexed value
+  ExprAST* Right; ///< Index
+};
+
+/// AST type for member access expression
+struct MemberAccessExprAST : ExprAST {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] val - aggregate expression
+  /// \param[in] memberName - name of aggregates member
+  MemberAccessExprAST(llvm::SMLoc loc, ExprAST *val, Name *memberName)
+    : ExprAST(loc, EI_MemberAccess),
+      Val(val),
+      MemberName(memberName),
+      ThisSym(nullptr),
+      ThisAggr(nullptr),
+      SemaDone(false) {
+  }
+
+  /// Destructor
+  ~MemberAccessExprAST() {
+    delete Val;
+  }
+
+  bool isLValue();
+  SymbolAST* getAggregate(Scope *scope);
+  bool canBeNull();
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getLValue(SLContext& Context);
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_MemberAccess;
+  }
+
+  ExprAST* Val; ///< Aggregate value
+  Name* MemberName; ///< Member name
+  SymbolAST* ThisSym; ///< Symbol for member (only valid after semantic pass)
+  SymbolAST* ThisAggr; ///< Symbol for aggregate
+  bool SemaDone; ///< true - if semantic are done
+};
+
+/// AST type of member access through pointer
+struct PointerAccessExprAST : ExprAST {
+  PointerAccessExprAST(llvm::SMLoc loc,
+    ExprAST *val,
+    Name *memberName)
+    : ExprAST(loc, EI_PointerAccess),
+      Val(val),
+      MemberName(memberName),
+      ThisSym(nullptr) {
+  }
+
+  ~PointerAccessExprAST() {
+    delete Val;
+  }
+
+  bool isLValue();
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getLValue(SLContext& Context);
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_PointerAccess;
+  }
+
+  ExprAST* Val; ///< Aggregate value (can be IdExprAST or MemberAccessExprAST)
+  Name* MemberName; ///< Member name
+  SymbolAST* ThisSym; ///< Symbol for member (only valid after semantic pass)
+};
+
+/// AST node for dereference expression
+struct DerefExprAST : ExprAST {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] val - expression to dereference
+  DerefExprAST(llvm::SMLoc loc, ExprAST *val)
+    : ExprAST(loc, EI_Deref),
+      Val(val) {
+  }
+
+  /// Destructor
+  ~DerefExprAST() {
+    delete Val;
+  }
+
+  bool isLValue();
+  SymbolAST* getAggregate(Scope *scope);
+  bool canBeNull();
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getLValue(SLContext& Context);
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_Deref;
+  }
+
+  ExprAST* Val; ///< Expression to dereference
+};
+
+/// AST node for address expression
+struct AddressOfExprAST : ExprAST {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] val - expression which address should be taken
+  AddressOfExprAST(llvm::SMLoc loc, ExprAST *val)
+    : ExprAST(loc, EI_AddressOf),
+      Val(val) {
+  }
+
+  ~AddressOfExprAST() {
+    delete Val;
+  }
+
+  SymbolAST* getAggregate(Scope *scope);
+  bool canBeNull();
+  ExprAST* semantic(Scope* scope);
+  ExprAST* clone();
+
+  llvm::Value* getRValue(SLContext& Context);
+
+  static bool classof(const ExprAST *E) {
+    return E->ExprKind == EI_AddressOf;
+  }
+
+  ExprAST* Val; ///< Expression which address should be taken
 };
 
 /// AST node for cast expression
@@ -1001,12 +1440,15 @@ struct VarDeclAST : SymbolAST {
   /// \param[in] loc - location in the source file
   /// \param[in] varType - symbol's type
   /// \param[in] id - symbol's name
-  /// \param[in] value - symbol's initialization value (can be nullptr)
+  /// \param[in] value - symbol's initialization value (can be 0)
+  /// \param[in] inClass - true - if it's class/struct member
   VarDeclAST(llvm::SMLoc loc, TypeAST *varType, Name *id,
-    ExprAST* value)
+    ExprAST* value, bool inClass)
     : SymbolAST(loc, SI_Variable, id),
+      OffsetOf(-1),
       ThisType(varType),
       Val(value),
+      NeedThis(inClass),
       CodeValue(nullptr) {
   }
 
@@ -1015,9 +1457,12 @@ struct VarDeclAST : SymbolAST {
     delete Val;
   }
 
+  bool needThis();
   TypeAST* getType();
+  bool canBeNull();
   void doSemantic(Scope* scope);
   void doSemantic3(Scope* scope);
+  bool contain(TypeAST* type);
 
   llvm::Value* getValue(SLContext& Context);
   llvm::Value* generateCode(SLContext& Context);
@@ -1026,8 +1471,10 @@ struct VarDeclAST : SymbolAST {
     return T->SymbolKind == SI_Variable;
   }
 
+  int OffsetOf; ///< Offset of class/struct member
   TypeAST* ThisType; ///< Symbol's type
   ExprAST* Val; ///< Symbol's initialization value (can be nullptr)
+  bool NeedThis; ///< true - if this is class/struct member
 
   /// LLVM value for this symbol (only valid during code generation pass)
   llvm::Value* CodeValue;
@@ -1053,6 +1500,42 @@ struct ScopeSymbol : SymbolAST {
   SymbolMap Decls; ///< Declared variables
 };
 
+/// AST node for structure declaration
+struct StructDeclAST : ScopeSymbol {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] id - structure's name
+  /// \param[in] vars - list of structure members
+  StructDeclAST(llvm::SMLoc loc, Name *id, const SymbolList &vars)
+    : ScopeSymbol(loc, SI_Struct, id),
+      Vars(vars),
+      ThisType(nullptr) {
+    ThisType = new StructTypeAST(this);
+  }
+
+  /// Destructor
+  ~StructDeclAST() {
+    for (SymbolList::iterator it = Vars.begin(), end = Vars.end(); it != end; ++it) { 
+      delete *it;
+    }
+  }
+
+  TypeAST* getType();
+  void doSemantic(Scope* scope);
+  void doSemantic3(Scope* scope);
+  bool contain(TypeAST* type);
+
+  llvm::Value* generateCode(SLContext& Context);
+  llvm::Value* getValue(SLContext& Context);
+
+  static bool classof(const SymbolAST *T) {
+    return T->SymbolKind == SI_Struct;
+  }
+
+  SymbolList Vars; ///< List of structure members
+  TypeAST* ThisType; ///< Structure's type
+};
+
 /// AST node for function parameter symbol
 struct ParameterSymbolAST : SymbolAST {
   /// Constructor
@@ -1066,6 +1549,7 @@ struct ParameterSymbolAST : SymbolAST {
   }
 
   TypeAST* getType();
+  bool canBeNull();
   void doSemantic(Scope* scope);
 
   llvm::Value* getValue(SLContext& Context);

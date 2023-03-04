@@ -1,0 +1,65 @@
+fn check(s: string, a: float, b: float) {
+  if (a == b) {
+    printString(s);
+    printString(" ");
+    printLn("Pass");
+  }
+  else {
+    printString(s);
+    printString(" ");
+    printLn("Fail");
+  }
+}
+
+fn main() : float {
+  {
+    let a: int = 10;
+    let p: int* = &a;
+    let pp: int** = &p;
+    let ppp: int*** = &pp;
+
+    printLn("pointer operations");
+    check("a", a, 10);
+    check("*p", *p, 10);
+    check("**pp", **pp, 10);
+    check("***ppp", ***ppp, 10);
+    check("p[0]", p[0], 10);
+    check("pp[0][0]", pp[0][0], 10);
+    check("ppp[0][0][0]", ppp[0][0][0], 10);
+    if (p) {
+      printLn("if (p) Pass");
+    } else {
+      printLn("if (p) Fail");
+    }
+    if (pp) {
+      printLn("if (pp) Pass");
+    } else {
+      printLn("if (pp) Fail");
+    }
+    if (ppp) {
+      printLn("if (ppp) Pass");
+    } else {
+      printLn("if (ppp) Fail");
+    }
+  }
+  printLn("");
+  {
+    let a: int[3];
+
+    a[0] = 1;
+    a[1] = 2;
+    a[2] = 3;
+
+    let p: int* = a;
+
+    printLn("pointer arithmetic");
+    check("*++p", *++p, 2);
+    check("*p++", *p++, 2);
+    check("*p--", *p--, 3);
+    check("*--p", *--p, 1);
+    check("*(p + 2)", *(p + 2), 3);
+    check("*(&a[2] - 2)", *(&a[2] - 2), 1);
+  }
+
+  return 0.0;
+}

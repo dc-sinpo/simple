@@ -36,7 +36,7 @@ add_llvm_executable(simple simple.cpp
                  lib/Basic/Diagnostic.cpp lib/Basic/TokenKinds.cpp
                  lib/Driver/Driver.cpp
                  lib/CodeGen/Decls.cpp lib/CodeGen/Exprs.cpp lib/CodeGen/Stmts.cpp lib/CodeGen/Types.cpp
-                 lib/Lexer/Lexer.cpp lib/Lexer/TokenStream.cpp
+                 lib/Lexer/Lexer.cpp lib/Lexer/Name.cpp lib/Lexer/TokenStream.cpp
                  lib/Sema/Decls.cpp lib/Sema/Exprs.cpp lib/Sema/Stmts.cpp lib/Sema/Types.cpp
                  lib/Parser/Parser.cpp
               )

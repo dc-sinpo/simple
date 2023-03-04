@@ -1,0 +1,58 @@
+fn check(s: string, a: float, b: float) {
+  if a == b {
+    printString(s);
+    printString(" ");
+    printLn("Pass");
+  }
+  else {
+    printString(s);
+    printString(" ");
+    printLn("Fail");
+  }
+}
+
+fn main() : float {
+
+  {
+    let a: int[10];
+
+    for let i: int = 0; i < 10; ++i {
+      a[i] = i;
+    } 
+    printLn("single dimmension array tests");
+    check("a[5] == 5", a[5] == 5, 1);
+    check("a[5] + a[1] == 6", a[5] + a[1] == 6, 1);
+    check("a[1] = 2", a[1] = 2, 2);
+  }
+  printLn("");
+  {
+    let a: int[5][10][20];
+
+    for let i: int = 0; i < 20; ++i {
+      for let j: int = 0; j < 10; ++j {
+        for let k: int = 0; k < 5; ++k {
+          a[i][j][k] = i * 10000 + j * 100 + k;
+        }
+      }
+    }
+
+    printLn("multi-dimmension array tests");
+    check("a[1][2][3] == 10203", a[1][2][3] == 10203, 1);
+    check("a[1][2][3]++ == 10203", a[1][2][3]++ == 10203, 1);
+    check("++a[1][2][3] == 10205", ++a[1][2][3] == 10205, 1);
+    check("a[1][2][3]-- == 10205", a[1][2][3]-- == 10205, 1);
+    check("--a[1][2][3] == 10203", --a[1][2][3] == 10203, 1);
+
+    let p: int[5][10]*= a;
+
+    p[10][5][2] = 20;
+    check("a[10][5][2] == 20", a[10][5][2] == 20, 1);
+    
+    let pval: int* = &a[0][0][0];
+
+    check("pval[2 * 10 * 5 + 3 * 5 + 4] == 20304", pval[2 * 10 * 5 + 3 * 5 + 4] == 20304, 1);
+    check("pval[2 * 10 * 5 + 3 * 5 + 4] == a[2][3][4]", pval[2 * 10 * 5 + 3 * 5 + 4] == a[2][3][4], 1);
+  }
+ 
+  return 0.0;
+}

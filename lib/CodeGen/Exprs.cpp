@@ -20,9 +20,13 @@ Value* promoteToBool(Value* val, TypeAST* type, IRBuilder< >& builder) {
     return val;
   }
 
-  if (type->isInt()) {
+  if (type->isInt() || type->isChar()) {
     // Convert integral value to bool by comparison with 0
     return builder.CreateICmpNE(val, ConstantInt::get(type->getType(), 0));
+  } else if (isa<PointerTypeAST>(type) || type->isString()) {
+    // Convert pointer or string value to bool by comparison with null
+    return builder.CreateICmpNE(val, 
+      ConstantPointerNull::get((PointerType*)type->getType()));
   } else {
     assert(type->isFloat());
     // Convert floating point value to bool by comparison with 0.0
@@ -44,6 +48,45 @@ Value* FloatExprAST::getRValue(SLContext& ) {
   return ConstantFP::get(ExprType->getType(), Val);
 }
 
+Value* StringExprAST::getRValue(SLContext& Context) {
+  // For string literal we need:
+  // 1. Create global string;
+  // 2. Create GetElementPtr instruction to get just created value from global
+  //   variable
+  GlobalValue* val = Context.TheBuilder->CreateGlobalString(Val);
+  std::vector< Value* > idx;
+
+  idx.push_back(getConstInt(0));
+  idx.push_back(getConstInt(0));
+
+  return Context.TheBuilder->CreateInBoundsGEP(val->getValueType(), val, idx);
+}
+
+Value* ProxyExprAST::getRValue(SLContext& Context) {
+  return OriginalExpr->getRValue(Context);
+}
+
+Value* NewExprAST::getRValue(SLContext& Context) {
+  // We need to get size of type to allocate and patch old 0 value with actual
+  // size
+  uint64_t allocSize = Context.TheTarget->getTypeAllocSize(NewType->getType());
+  SizeExpr->Val = (int)allocSize;
+  // Generate code for call expression
+  Value* val = CallExpr->getRValue(Context);
+
+  if (NeedCast) {
+    // It wasn't constructor call and we should create cast to resulted type
+    return Context.TheBuilder->CreateBitCast(val, ExprType->getType());
+  }
+  
+  return val;
+}
+
+Value* DeleteExprAST::getRValue(SLContext& Context) {
+  Value* val = DeleteCall->getRValue(Context);
+  return val;
+}
+
 Value* IdExprAST::getLValue(SLContext& Context) {
   return ThisSym->getValue(Context);
 }
@@ -62,10 +105,120 @@ Value* IdExprAST::getRValue(SLContext& Context) {
   );
 }
 
+Value* IndexExprAST::getLValue(SLContext& Context) {
+  // We have 2 different implementations for array and pointer
+  if (isa<ArrayTypeAST>(Left->ExprType)) {
+    // We should get array as lvalue
+    Value* val = Left->getLValue(Context);
+    Value* index = Right->getRValue(Context);
+
+    std::vector< Value* > idx;
+
+    idx.push_back(getConstInt(0));
+    idx.push_back(index);
+
+    return Context.TheBuilder->CreateInBoundsGEP(Left->ExprType->getType(), val, idx);
+  } else {
+    // We should get pointer as rvalue
+    Value* val = Left->getRValue(Context);
+    Value* index = Right->getRValue(Context);
+
+    std::vector< Value* > idx;
+
+    idx.push_back(index);
+
+    return Context.TheBuilder->CreateInBoundsGEP(ExprType->getType(), val, idx);
+  }
+}
+
+Value* IndexExprAST::getRValue(SLContext& Context) {
+  Value* val = getLValue(Context);
+  return Context.TheBuilder->CreateLoad(ExprType->getType(), val);
+}
+
+Value* MemberAccessExprAST::getLValue(SLContext& Context) {
+  // For function simply return value
+  if (isa<FuncTypeAST>(ExprType)) {
+    return ThisSym->getValue(Context);
+  }
+
+  // Generate lvalue for this
+  Value* val = Val->getLValue(Context);
+
+  // Generate code for member's offset
+  Value* index = getConstInt(((VarDeclAST*)ThisSym)->OffsetOf);
+
+  std::vector< Value* > idx;
+
+  idx.push_back(getConstInt(0));
+  idx.push_back(index);
+
+  // Generate GetElementPtr for needed value
+  return Context.TheBuilder->CreateGEP(ThisSym->Parent->getType()->getType(), val, idx);
+}
+
+Value* MemberAccessExprAST::getRValue(SLContext& Context) {
+  // Generate lvalue for this
+  Value* val = getLValue(Context);
+
+  // For function simply return value
+  if (isa<FuncTypeAST>(ExprType)) {
+    return val;
+  }
+
+  // For rvalue we always need to load just generated value
+  return Context.TheBuilder->CreateLoad(ExprType->getType(), val);
+}
+
+Value* PointerAccessExprAST::getLValue(SLContext& Context) {
+  assert(0 && "PointerAccessExprAST::getLValue should never be reached");
+  return nullptr;
+}
+
+Value* PointerAccessExprAST::getRValue(SLContext& Context) {
+  assert(0 && "PointerAccessExprAST::getRValue should never be reached");
+  return nullptr;
+}
+
+Value* DerefExprAST::getLValue(SLContext& Context) {
+  // Check is it lvalue or not
+  if (Val->isLValue()) {
+    Value* val = Val->getLValue(Context);
+    return Context.TheBuilder->CreateLoad(
+      PointerType::get(
+        getGlobalContext(),
+        Context.TheTarget->getProgramAddressSpace()
+      ),
+      val
+    );
+  } else {
+    // Special case for function's call and binary expression
+    return Val->getRValue(Context); 
+  }
+}
+
+Value* DerefExprAST::getRValue(SLContext& Context) {
+  Value* val = getLValue(Context);
+
+  // If it's function return it's value
+  if (isa<FuncTypeAST>(ExprType)) {
+    return val;
+  }
+
+  // For rvalue we always need to generate load
+  return Context.TheBuilder->CreateLoad(ExprType->getType(), val);
+}
+
+Value* AddressOfExprAST::getRValue(SLContext& Context) {
+  // For address expression rvalue use lvalue of nested expression
+  // Note: We can't have lvalue
+  return Val->getLValue(Context);
+}
+
 Value* CastExprAST::getRValue(SLContext& Context) {
   // Check convert to int first
   if (ExprType->isInt()) {
-    if (Val->ExprType->isBool()) {
+    if (Val->ExprType->isBool() || Val->ExprType->isChar()) {
       // If old expression type is bool then extend value with 0
       return Context.TheBuilder->CreateZExt(Val->getRValue(Context), 
         ExprType->getType());
@@ -83,7 +236,76 @@ Value* CastExprAST::getRValue(SLContext& Context) {
     return promoteToBool(Val->getRValue(Context), Val->ExprType, 
       *Context.TheBuilder);
     // Check for conversion to char
-  } else if (Val->ExprType->isInt()) {
+  } else if (ExprType->isChar()) {
+    // If it's bool then extend it
+    if (Val->ExprType->isBool()) {
+      return Context.TheBuilder->CreateZExt(Val->getRValue(Context),
+        ExprType->getType());
+    }
+
+    assert(Val->ExprType->isInt());
+    // Truncate integral value
+    return Context.TheBuilder->CreateTrunc(Val->getRValue(Context),
+      ExprType->getType());
+  // Check for conversion to string
+  } else if (ExprType->isString()) {
+    if (isa<ArrayTypeAST>(Val->ExprType)) {
+      Value* val = Val->getLValue(Context);
+      Value* tmp = getConstInt(0);
+
+      std::vector< Value* > idx;
+
+      idx.push_back(tmp);
+      idx.push_back(tmp);
+
+      if (isa<AllocaInst>(val)) {
+        AllocaInst *alloca = (AllocaInst*)val;
+
+        return Context.TheBuilder->CreateGEP(alloca->getAllocatedType(), val, idx);
+      } else {
+        assert(0);
+      }
+    } else {
+      Value* val = Val->getRValue(Context);
+      // Generate cast
+      return Context.TheBuilder->CreateBitCast(val, ExprType->getType());
+    }
+  // Check for conversion to pointer
+  } else if (isa<PointerTypeAST>(ExprType)) {
+    // If converted expression is pointer too then check it
+    if (isa<PointerTypeAST>(Val->ExprType)) {
+      // Generate rvalue expression
+      return Val->getRValue(Context);
+    } else if (isa<ArrayTypeAST>(Val->ExprType)) {
+      Value* val = Val->getLValue(Context);
+      Value* tmp = getConstInt(0);
+
+      std::vector< Value* > idx;
+
+      idx.push_back(tmp);
+      idx.push_back(tmp);
+
+      if (isa<AllocaInst>(val)) {
+        AllocaInst *alloca = (AllocaInst*)val;
+
+        tmp = Context.TheBuilder->CreateGEP(alloca->getAllocatedType(), val, idx);
+      } else {
+        assert(0);
+      }
+
+      PointerTypeAST* ptrType = (PointerTypeAST*)ExprType;
+
+      if (ptrType->Next->isVoid()) {
+        tmp = Context.TheBuilder->CreateBitCast(tmp, ptrType->getType());
+      }
+
+      return tmp;
+    } else {
+      Value* val = Val->getRValue(Context);
+      // Generate cast
+      return Context.TheBuilder->CreateBitCast(val, ExprType->getType());
+    }
+  } else if (Val->ExprType->isInt() || Val->ExprType->isChar()) {
     // It's char or int value, convert it to float
     return Context.TheBuilder->CreateSIToFP(Val->getRValue(Context), 
       ExprType->getType());
@@ -98,8 +320,38 @@ Value* CastExprAST::getRValue(SLContext& Context) {
 }
 
 Value* UnaryExprAST::getRValue(SLContext& Context) {
-  assert(0 && "Should never happen");
-  return nullptr;
+  assert(Op == tok::PlusPlus || Op == tok::MinusMinus);
+  assert(isa<IndexExprAST>(Val) || isa<MemberAccessExprAST>(Val) || ExprType->isString());
+  // Generate code for lvalue
+  Value* val = Val->getLValue(Context);
+  // Generate load with add 1 or add -1
+  Value* res = Context.TheBuilder->CreateLoad(ExprType->getType(), val);
+  Value* tmp = getConstInt((Op == tok::PlusPlus) ? 1ULL : ~0ULL);
+
+  if (isa<PointerTypeAST>(ExprType) || ExprType->isString()) {
+    Type *resType;
+
+    if (isa<PointerTypeAST>(ExprType)) {
+      PointerTypeAST *ptrType = (PointerTypeAST*)ExprType;
+
+      if (ptrType->Next->isVoid()) {
+        resType = Type::getInt8Ty(getGlobalContext());
+      } else {
+        resType = ptrType->Next->getType();
+      }
+    } else {
+      resType = Type::getInt8Ty(getGlobalContext());
+    }
+
+    // Special case for pointers
+    res = Context.TheBuilder->CreateGEP(resType, res, tmp);
+  } else {
+    res = Context.TheBuilder->CreateAdd(res, tmp);
+  }
+
+  // Store resulted value back
+  Context.TheBuilder->CreateStore(res, val);
+  return res;
 }
 
 Value* BinaryExprAST::getRValue(SLContext& Context) {
@@ -109,7 +361,22 @@ Value* BinaryExprAST::getRValue(SLContext& Context) {
   if (Op == tok::Assign) {
     
     // Generate code for right operand of the expression
-    Value* right = RightExpr->getRValue(Context);
+    Value* right;
+    
+    // We have special case for pointer
+    if (isa<PointerTypeAST>(ExprType)) {
+      // If it's integral constant 0 then we should convert it to null
+      if (RightExpr->ExprType->isInt()) {
+        right = ConstantPointerNull::get((PointerType*)ExprType->getType());
+      } else {
+        // Generate rvalue otherwise
+        right = RightExpr->getRValue(Context);
+      }
+    } else {
+      // Generate rvalue
+      right = RightExpr->getRValue(Context);
+    }
+
     // Get address of a variable to hold result
     Value* res = LeftExpr->getLValue(Context);
 
@@ -131,22 +398,54 @@ Value* BinaryExprAST::getRValue(SLContext& Context) {
   if (Op == tok::PlusPlus || Op == tok::MinusMinus) {
     // Get address of a variable and generate load instruction
     Value* var = LeftExpr->getLValue(Context);
-    Value* val = LeftExpr->getRValue(Context);
+    Value* val = nullptr;
 
-    if (Op == tok::PlusPlus) {
-      // Create integral constant 1 and add it to loaded variable
-      Value* tmp = getConstInt(1);
-      tmp = Context.TheBuilder->CreateAdd(val, tmp, "inctmp");
+    if (isa<IndexExprAST>(LeftExpr) || isa<MemberAccessExprAST>(LeftExpr)) {
+      // Special case for indexing and member access expressions, because we
+      // don't want to generate GetElementPtr instruction twice
+      val = Context.TheBuilder->CreateLoad(ExprType->getType(), var);
+    } else {
+      val = LeftExpr->getRValue(Context);
+    }
+
+    if (!LeftExpr->ExprType->isInt()) {
+      // Special case for pointer types. We should generate GetElementPtr
+      // instruction
+      Value* tmp = getConstInt((Op == tok::PlusPlus) ? 1ULL : ~0ULL);
+      Type *resType;
+
+      if (isa<PointerTypeAST>(ExprType)) {
+        PointerTypeAST *ptrType = (PointerTypeAST*)ExprType;
+
+        if (ptrType->Next->isVoid()) {
+          resType = Type::getInt8Ty(getGlobalContext());
+        } else {
+          resType = ptrType->Next->getType();
+        }
+      } else {
+        resType = Type::getInt8Ty(getGlobalContext());
+      }
+
+      tmp = Context.TheBuilder->CreateGEP(resType, val, tmp);
       // Store result and return old value
       Context.TheBuilder->CreateStore(tmp, var);
       return val;
     } else {
-      // Create integral constant -1 and add it to loaded variable
-      Value* tmp = getConstInt(~0ULL);
-      tmp = Context.TheBuilder->CreateAdd(val, tmp, "dectmp");
-      // Store result and return old value
-      Context.TheBuilder->CreateStore(tmp, var);
-      return val;
+      if (Op == tok::PlusPlus) {
+        // Create integral constant 1 and add it to loaded variable
+        Value* tmp = getConstInt(1);
+        tmp = Context.TheBuilder->CreateAdd(val, tmp, "inctmp");
+        // Store result and return old value
+        Context.TheBuilder->CreateStore(tmp, var);
+        return val;
+      } else {
+        // Create integral constant -1 and add it to loaded variable
+        Value* tmp = getConstInt(~0ULL);
+        tmp = Context.TheBuilder->CreateAdd(val, tmp, "dectmp");
+        // Store result and return old value
+        Context.TheBuilder->CreateStore(tmp, var);
+        return val;
+      }
     }
   }
 
@@ -247,6 +546,25 @@ Value* BinaryExprAST::getRValue(SLContext& Context) {
 
     return PN;
   }
+
+  // Special case for +/- on pointers
+  if (isa<PointerTypeAST>(ExprType)) {
+    Value* ptr = LeftExpr->getRValue(Context);
+    Value* index = RightExpr->getRValue(Context);
+
+    if (Op == tok::Minus) {
+      index = Context.TheBuilder->CreateSub(getConstInt(0), index);
+    }
+
+    PointerTypeAST *ptrType = (PointerTypeAST*)ExprType;
+    Type *resType = ptrType->Next->isVoid()
+      ? Type::getInt8Ty(getGlobalContext())
+      : ptrType->Next->getType();
+
+    return Context.TheBuilder->CreateGEP(resType, ptr, index);
+  }
+
+  // It's regular binary operator
 
   // Generate code for left and right operands
   Value* lhs = LeftExpr->getRValue(Context);
