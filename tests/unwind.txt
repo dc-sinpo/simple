@@ -1,0 +1,116 @@
+class Printer {
+  new(n: int) {
+    N = n;
+  }
+
+  del() {
+    print("d");
+    print(N);
+  }
+
+  N: int;
+}
+
+fn Test1(i: int) {
+  let p1: Printer(1);
+
+  if (i > 10) {
+    let p2: Printer(2);
+
+    while (i < 20) {
+      let p3: Printer(3);
+
+      if (i == 15) {
+        break;
+      }
+
+      let p4: Printer(4);
+
+      ++i;
+    }
+  }
+}
+
+fn Test2(a: int, b: int) : int {
+  let p1: Printer(1);
+  let i: int = a;
+
+  while (i < b) {
+    let p2: Printer(2);
+
+    if (i == 5) {
+      return 1;
+    }
+
+    let p3: Printer(3);
+
+    if (i == 6) {
+      return 2;
+    }
+
+    ++i;
+  }
+
+  let p4: Printer(4);
+
+  return b;
+}
+
+fn Test3(a: int, b: int) {
+  if (a > 0) {
+    let p1: Printer(1);
+    let i: int = a;
+
+    while (i < b) {
+      let p2: Printer(2);
+
+      if (i == 5) {
+        let p3: Printer(3);
+      }
+      else
+      { 
+        let p4: Printer(4);
+
+        if (i == 11) {
+          return;
+        }
+      }
+
+      ++i;
+    }
+  }
+  
+  let p5: Printer(5);
+}
+
+fn main() : float {
+  printLn("Test1(19) - result should be: d4d3d2d1");
+  Test1(19);
+
+  printLn("");
+  printLn("Test1(18) - result should be: d4d3d4d3d2d1");
+  Test1(18);
+
+  printLn("");
+  printLn("Test1(15) - result should be: d3d2d1");
+  Test1(15);
+
+  printLn("");
+  printLn("Test2(1, 4) - result should be: d3d2d3d2d3d2d4d1");
+  Test2(1, 4);
+
+  printLn("");
+  printLn("Test2(5, 10) - result should be: d2d1");
+  Test2(5, 10);
+
+  printLn("");
+  printLn("Test3(4, 10) - result should be: d4d2d3d2d4d2d4d2d4d2d4d2d1d5");
+  Test3(4, 10);
+
+  printLn("");
+  printLn("Test3(8, 12) - result should be: d4d2d4d2d4d2d4d2d1");
+  Test3(8, 12);
+
+  printLn("");
+  return 0.0;
+}

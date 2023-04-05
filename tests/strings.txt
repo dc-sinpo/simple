@@ -1,0 +1,158 @@
+fn check(s: string, a: float, b: float) {
+  if (a == b) {
+    print(s);
+    print(" ");
+    printLn("Pass");
+  }
+  else {
+    print(s);
+    print(" ");
+    printLn("Fail");
+  }
+}
+
+fn check(s: string, a: string, b: string) {
+  if (strCmp(a, b) == 0) {
+    print(s);
+    print(" ");
+    printLn("Pass");
+  }
+  else {
+    print(s);
+    print(" ");
+    printLn("Fail");
+  }
+}
+
+fn strLen(str: string) : int {
+  let length: int = 0;
+  let p: string = str;
+
+  while (*p) {
+    ++p, ++length;
+  }
+
+  return length;
+}
+
+fn strCmp(str1: string, str2: string) : int {
+  let p1: string = str1;
+  let p2: string = str2;
+
+  while ((*p1 && *p2) && (*p1 == *p2)) {
+    ++p1;
+    ++p2;
+  }
+
+  return *p1 - *p2;
+}
+
+fn strCpy(dest: char*, src: string) : char* {
+  let p: char* = dest;
+  let tmp: string = src;
+
+  while (*tmp) {
+    *p++ = *tmp++;
+  }
+
+  *p = *tmp;
+
+  return dest;
+}
+
+fn strCat(dest: char*, src: string) : char* {
+  let p: char* = dest + strLen(dest);
+  strCpy(p, src);
+  return dest;
+}
+
+class String {
+  new() {
+    length = 0;
+    buffSize = 16;
+    buffer = new char[buffSize];
+	  buffer[0] = 0;
+  }
+
+  new(str: string) {
+    length = strLen(str);
+    buffSize = length + 1;
+    buffer = new char[buffSize];
+    strCpy(buffer, str);
+  }
+
+  del() {
+    del buffer;
+  }
+
+  fn append(str: string) {
+    let addLength: int = strLen(str);
+
+    if (addLength + length > buffSize) {
+      buffSize = addLength + length + 1;
+      
+      let newBuffer: char* = new char[buffSize];
+      
+      strCpy(newBuffer, buffer);
+      del buffer;
+      buffer = newBuffer;
+    }
+
+    strCat(buffer + length, str);
+    length = length + addLength;
+  }
+
+  fn assign(str: string) {
+    let addLength: int = strLen(str);
+    
+    if (addLength > buffSize) {
+      buffSize = addLength + 1;
+
+      let newBuffer: char* = new char[buffSize];
+      
+      del buffer;
+      buffer = newBuffer;
+    }
+
+    strCpy(buffer, str);
+    length = length;
+  }
+
+  fn toString() : string {
+    return buffer;
+  }
+
+  length: int;
+  buffSize: int;
+  buffer: char*;
+}
+
+fn main() : float {
+  {  
+    printLn("string functions tests");
+    check("strLen(""Hello, world!"")", strLen("Hello, world!"), 13);
+    check("strCmp(""Hello"", ""Hello"")", strCmp("Hello", "Hello"), 0);
+    check("strCmp(""Hell"", ""Hello"") < 0", strCmp("Hell", "Hello") < 0, 1);
+    check("strCmp(""Hello"", ""Hell"") > 0", strCmp("Hello", "Hell") > 0, 1);
+
+    let a: char[20];
+
+    check("strCpy(a, ""Hello"")", strCpy(a, "Hello"), "Hello");
+    check("strCat(a, "", world!"")", strCat(a, ", world!"), "Hello, world!");
+  }
+  printLn("");
+  {
+    printLn("String class tests");
+    let str: String("Hello");
+
+    str.append(", world!");
+
+    printLn(str.toString());
+
+    str.assign("Hi");
+
+    printLn(str.toString());
+  }
+
+  return 0.0;
+}

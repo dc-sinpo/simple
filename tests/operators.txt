@@ -1,12 +1,12 @@
 fn check(s: string, a: float, b: float) {
   if (a == b) {
-    printString(s);
-    printString(" ");
+    print(s);
+    print(" ");
     printLn("Pass");
   }
   else {
-    printString(s);
-    printString(" ");
+    print(s);
+    print(" ");
     printLn("Fail");
   }
 }

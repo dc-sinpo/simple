@@ -32,6 +32,7 @@ struct TypeAST {
     TI_String,   ///< string type
     TI_Pointer,  ///< pointer type
     TI_Array,    ///< array type
+    TI_Class,    ///< class type
     TI_Struct,   ///< structure type
     TI_Function, ///< function type
     TI_Qualified ///< qualified name type
@@ -76,7 +77,7 @@ struct TypeAST {
   }
   /// Check is it aggregate type
   bool isAggregate() {
-    return TypeKind == TI_Struct;
+    return TypeKind == TI_Class || TypeKind == TI_Struct;
   }
 
   /// Perform semantic analysis on type
@@ -92,6 +93,8 @@ struct TypeAST {
   ///   two types have same decoration name then they are same)
   /// \param[in] output - resulted buffer
   virtual void toMangleBuffer(llvm::raw_ostream& output) = 0;
+  /// Check is this type is base class of \c type
+  virtual bool isBaseOf(TypeAST* type);
   /// Get SymbolAST associated with this type (only valid for ClassTypeAST and
   ///   StructTypeAST)
   virtual SymbolAST* getSymbol();
@@ -256,9 +259,11 @@ struct SymbolAST {
   enum SymbolId {
     SI_Variable,    ///< variable declaration
     SI_Struct,      ///< structure declaration
+    SI_Class,       ///< class declaration
     SI_Function,    ///< function declaration
     SI_Module,      ///< module declaration
     SI_Parameter,   ///< function's parameter declaration
+    SI_OverloadSet, ///< function's overload set
     SI_Block        ///< scope declaration
   };
 
@@ -278,7 +283,7 @@ struct SymbolAST {
   virtual ~SymbolAST() {}
 
   bool isAggregate() {
-    return SymbolKind == SI_Struct;
+    return SymbolKind == SI_Struct || SymbolKind == SI_Class;
   }
   
   /// Check need this symbol this value (true - class/struct members)
@@ -452,6 +457,7 @@ struct StructTypeAST : TypeAST {
   TypeAST* semantic(Scope* scope);
   bool implicitConvertTo(TypeAST* newType);
   void toMangleBuffer(llvm::raw_ostream& output);
+  bool isBaseOf(TypeAST* type);
   SymbolAST* getSymbol();
 
   llvm::Type* getType();
@@ -463,11 +469,35 @@ struct StructTypeAST : TypeAST {
   SymbolAST* ThisDecl; ///< Structure declaration
 };
 
+/// AST node for class type
+struct ClassTypeAST : TypeAST {
+  /// Constructor
+  /// \param[in] thisDecl - class declaration
+  ClassTypeAST(SymbolAST* thisDecl)
+    : TypeAST(TI_Class),
+      ThisDecl(thisDecl) {
+  }
+
+  TypeAST* semantic(Scope* scope);
+  bool implicitConvertTo(TypeAST* newType);
+  void toMangleBuffer(llvm::raw_ostream& output);
+  bool isBaseOf(TypeAST* type);
+  SymbolAST* getSymbol();
+
+  llvm::Type* getType();
+
+  static bool classof(const TypeAST *T) {
+    return T->TypeKind == TI_Class;
+  }
+
+  SymbolAST* ThisDecl;
+};
+
 /// AST node for function parameter
 struct ParameterAST {
   /// Constructor
   /// \param[in] type - type of function parameter
-  /// \param[in] id - name of function parameter (can be 0)
+  /// \param[in] id - name of function parameter (can be nullptr)
   ParameterAST(TypeAST* type, Name* id)
     : Param(type),
       Id(id),
@@ -495,7 +525,8 @@ struct FuncTypeAST : TypeAST {
   FuncTypeAST(TypeAST* returnType, const ParameterList& params)
     : TypeAST(TI_Function),
       ReturnType(returnType),
-      Params(params) {
+      Params(params),
+      HasThis(false) {
   }
 
   ~FuncTypeAST() {
@@ -517,6 +548,7 @@ struct FuncTypeAST : TypeAST {
 
   TypeAST* ReturnType; ///< Type of function's return value (nullptr for void)
   ParameterList Params; ///< List of function's parameters
+  bool HasThis; ///< true - if it's class members
 };
 
 /// Qualified name
@@ -787,6 +819,23 @@ struct MemberAccessExprAST : ExprAST {
       MemberName(memberName),
       ThisSym(nullptr),
       ThisAggr(nullptr),
+      ForceThis(false),
+      SemaDone(false) {
+  }
+
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] aggrSym - symbol for aggregate
+  /// \param[in] forcedThis - expression with this argument
+  /// \param[in] memberName - name of aggregates member
+  MemberAccessExprAST(llvm::SMLoc loc, SymbolAST *aggrSym,
+    ExprAST* forcedThis, Name* memberName)
+    : ExprAST(loc, EI_MemberAccess),
+      Val(forcedThis),
+      MemberName(memberName),
+      ThisSym(nullptr),
+      ThisAggr(aggrSym),
+      ForceThis(true),
       SemaDone(false) {
   }
 
@@ -812,6 +861,7 @@ struct MemberAccessExprAST : ExprAST {
   Name* MemberName; ///< Member name
   SymbolAST* ThisSym; ///< Symbol for member (only valid after semantic pass)
   SymbolAST* ThisAggr; ///< Symbol for aggregate
+  bool ForceThis; ///< true - if this for expression was set by user
   bool SemaDone; ///< true - if semantic are done
 };
 
@@ -1106,13 +1156,17 @@ struct ExprStmtAST : StmtAST {
 struct LandingPadAST {
   /// Constructor
   /// \param[in] prev - previous landing location
-  LandingPadAST(LandingPadAST* prev)
+  /// \param[in] needCleanup - true - if cleanup needed
+  LandingPadAST(LandingPadAST* prev, bool needCleanup)
     : Prev(prev),
+      NeedCleanup(needCleanup),
       ReturnValue(nullptr),
+      CleanupValue(nullptr),
       OwnerBlock(nullptr),
       BreakLoc(nullptr),
       ContinueLoc(nullptr),
       ReturnLoc(nullptr),
+      CleanupLoc(nullptr),
       FallthroughLoc(nullptr),
       Breaks(0),
       Returns(0),
@@ -1123,11 +1177,14 @@ struct LandingPadAST {
   /// Constructor
   LandingPadAST()
     : Prev(nullptr),
+      NeedCleanup(false),
       ReturnValue(nullptr),
+      CleanupValue(nullptr),
       OwnerBlock(nullptr),
       BreakLoc(nullptr),
       ContinueLoc(nullptr),
       ReturnLoc(nullptr),
+      CleanupLoc(nullptr),
       FallthroughLoc(nullptr),
       Breaks(0),
       Returns(0),
@@ -1137,13 +1194,18 @@ struct LandingPadAST {
 
   /// Get return value
   llvm::Value* getReturnValue();
+  /// Get cleanup value
+  llvm::Value* getCleanupValue();
 
   LandingPadAST* Prev; ///< Previous landing location
+  bool NeedCleanup; ///< true - if cleanup needed
   llvm::Value* ReturnValue; ///< Return value (you should use getReturnValue)
+  llvm::Value* CleanupValue; ///< Cleanup value (you should use getCleanupValue)
   StmtAST* OwnerBlock; ///< Owner block statement
   llvm::BasicBlock* BreakLoc; ///< Location for break statement
   llvm::BasicBlock* ContinueLoc; ///< Location for continue statement
   llvm::BasicBlock* ReturnLoc; ///< Location for return statement
+  llvm::BasicBlock* CleanupLoc; ///< Location for cleanup
   llvm::BasicBlock* FallthroughLoc; ///< Location for fallthrough
   int Breaks; ///< Number of break statements which can lead to this landing pad
   int Returns; ///< Number of return statments which can lead to this landing pad
@@ -1327,6 +1389,11 @@ struct BlockStmtAST : StmtAST {
 
     delete ThisBlock;
     delete LandingPad;
+
+    for (ExprList::iterator it = CleanupList.begin(), end = CleanupList.end();
+      it != end; ++it) {
+      delete *it;
+    }
   }
 
   bool hasReturn();
@@ -1353,6 +1420,8 @@ struct BlockStmtAST : StmtAST {
   SymbolAST* ThisBlock; ///< Symbol for inner variables
   LandingPadAST* LandingPad; ///< Landing pad
   bool IsPromoted; ///< true - if this block is promoted from variable declaration
+  /// List of variables which should be destroyed at the end of this block
+  ExprList CleanupList;
 };
 
 /// AST node for declaration statement
@@ -1440,7 +1509,7 @@ struct VarDeclAST : SymbolAST {
   /// \param[in] loc - location in the source file
   /// \param[in] varType - symbol's type
   /// \param[in] id - symbol's name
-  /// \param[in] value - symbol's initialization value (can be 0)
+  /// \param[in] value - symbol's initialization value (can be nullptr)
   /// \param[in] inClass - true - if it's class/struct member
   VarDeclAST(llvm::SMLoc loc, TypeAST *varType, Name *id,
     ExprAST* value, bool inClass)
@@ -1536,6 +1605,106 @@ struct StructDeclAST : ScopeSymbol {
   TypeAST* ThisType; ///< Structure's type
 };
 
+/// AST node for virtual function's table
+struct VTableAST {
+  /// Constructor
+  /// \param[in] parent - owning class
+  VTableAST(SymbolAST* parent)
+    : Parent(parent),
+      CurOffset(0),
+      CodeValue(nullptr),
+      VTblType(nullptr) {
+  }
+
+  /// Check is \c func has slot in this table
+  /// \param[in] func - function too check
+  bool isExist(SymbolAST* func);
+  /// Copy this table for \c parent class
+  VTableAST* clone(SymbolAST* parent);
+  /// Add \c func in the table or replace old value
+  void addOrReplace(Scope *scope, SymbolAST* func);
+  /// Generate code for virtual function's table
+  /// \param[in] Context - code generation's context
+  llvm::Value* generateCode(SLContext& Context);
+
+  SymbolAST* Parent; ///< Owning class
+  /// Map of virtual functions
+  typedef std::map< Name*, SymbolAST* > SymbolMap;
+  SymbolMap Decls; ///< Virtual functions in this table
+  int CurOffset; ///< Offset for new function
+  llvm::Value* CodeValue; ///< Generated value for this table
+  llvm::Type* VTblType; ///< Generated type fot this table
+
+private:
+  /// Constructor
+  /// \param[in] other - virtual table to copy
+  /// \param[in] parent - owning class
+  VTableAST(const VTableAST& other, SymbolAST* parent)
+    : Parent(parent),
+      Decls(other.Decls),
+      CurOffset(other.CurOffset),
+      CodeValue(nullptr),
+      VTblType(nullptr) {
+  }
+};
+
+/// AST node for class declaration
+struct ClassDeclAST : ScopeSymbol {
+  /// Constructor
+  /// \param[in] loc - location in the source file
+  /// \param[in] id - class name
+  /// \param[in] baseClass - base class (can be nullptr)
+  /// \param[in] vars - list of class members
+  ClassDeclAST(llvm::SMLoc loc, Name *id, TypeAST *baseClass,
+    const SymbolList& vars)
+    : ScopeSymbol(loc, SI_Class, id),
+      BaseClass(baseClass),
+      Vars(vars),
+      ThisType(nullptr),
+      Ctor(false),
+      Dtor(false),
+      VTbl(nullptr),
+      OwnVTable(false) {
+    ThisType = new ClassTypeAST(this);
+  }
+
+  /// Destructor
+  ~ClassDeclAST() {
+    for (SymbolList::iterator it = Vars.begin(), end = Vars.end(); it != end; ++it) {
+      delete *it;
+    }
+
+    if (OwnVTable) {
+      delete VTbl;
+    }
+  }
+
+  TypeAST* getType();
+  void doSemantic(Scope* scope);
+  void doSemantic2(Scope* scope);
+  void doSemantic3(Scope* scope);
+  void doSemantic4(Scope* scope);
+  void doSemantic5(Scope* scope);
+  bool contain(TypeAST* type);
+
+  llvm::Value* getValue(SLContext& Context);
+  llvm::Value* generateCode(SLContext& Context);
+
+  SymbolAST* find(Name* id, int flags = 0);
+
+  static bool classof(const SymbolAST *T) {
+    return T->SymbolKind == SI_Class;
+  }
+
+  TypeAST* BaseClass; ///< Base class
+  SymbolList Vars; ///< List of class members
+  TypeAST* ThisType; ///< Generated type
+  bool Ctor; ///< true - if has at least 1 constructor
+  bool Dtor; ///< true - if has destrucotr
+  VTableAST* VTbl; ///< Virtual function's table (can be nullptr)
+  bool OwnVTable; ///< true - if we have own VTable
+};
+
 /// AST node for function parameter symbol
 struct ParameterSymbolAST : SymbolAST {
   /// Constructor
@@ -1571,14 +1740,18 @@ struct FuncDeclAST : ScopeSymbol {
   /// \param[in] funcType - function's type
   /// \param[in] id - function's name
   /// \param[in] body - function's body
+  /// \param[in] inClass - true - if it's class member
   /// \param[in] tok - one of TK_Def, TK_Virtual or TK_Overload
   FuncDeclAST(llvm::SMLoc loc, TypeAST *funcType, Name *id,
-    StmtAST* body, int tok = tok::Def)
+    StmtAST* body, bool inClass, int tok = tok::Def)
     : ScopeSymbol(loc, SI_Function, id),
       ThisType(funcType),
       ReturnType(nullptr),
       Body(body),
+      NeedThis(inClass),
+      OffsetOf(-1),
       Tok(tok),
+      AggregateSym(nullptr),
       LandingPad(nullptr),
       CodeValue(nullptr),
       Compiled(false) {
@@ -1597,6 +1770,24 @@ struct FuncDeclAST : ScopeSymbol {
     }
   }
   
+  /// Check is it virtual function
+  bool isVirtual() {
+    return Tok == tok::Virtual;
+  }
+  /// Check is it override function
+  bool isOverride() {
+    return Tok == tok::Override;
+  }
+  /// Check is it constructor
+  bool isCtor() {
+    return Id == Name::Ctor;
+  }
+  /// Check is it destructor
+  bool isDtor() {
+    return Id == Name::Dtor;
+  }
+
+  bool needThis();
   TypeAST* getType();
   llvm::Value* getValue(SLContext& Context);
   llvm::Value* generateCode(SLContext& Context);
@@ -1611,7 +1802,10 @@ struct FuncDeclAST : ScopeSymbol {
   /// Type of function's return value (Valid after semantic pass)
   TypeAST* ReturnType;
   StmtAST* Body; ///< Function's body
-  int Tok; ///< One of TK_Def
+  bool NeedThis; ///< true - if it's class member function
+  int OffsetOf; ///< Index of function in the virtual table
+  int Tok; ///< One of TK_Virtual, TK_Def, TK_Override
+  SymbolAST* AggregateSym; ///< Parent aggregate declaration
   LandingPadAST* LandingPad; ///< Landing location
 
   /// List of all variables declared in the function
@@ -1621,6 +1815,28 @@ struct FuncDeclAST : ScopeSymbol {
   /// Code generated for function's declaration
   llvm::Function* CodeValue;
   bool Compiled; ///< true - if function is compiled (or runtime function)
+};
+
+/// AST node for function's overload set
+struct OverloadSetAST : SymbolAST {
+  /// Constructor
+  /// \param[in] name - overload set's name
+  OverloadSetAST(Name* name)
+    : SymbolAST(llvm::SMLoc(), SI_OverloadSet, name) {
+  }
+
+  /// Add new function to the set
+  /// \param[in] func - function to add
+  void push(Scope *scope, SymbolAST* func);
+
+  OverloadSetAST* clone();
+
+  static bool classof(const SymbolAST *T) {
+    return T->SymbolKind == SI_OverloadSet;
+  }
+
+  SymbolList Vars; ///< List of overloaded functions
+  llvm::StringSet< > OverloadsUsed; ///< List of used overloads
 };
 
 /// AST node for module declaration

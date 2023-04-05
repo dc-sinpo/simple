@@ -115,6 +115,23 @@ ExprAST* NewExprAST::semantic(Scope* scope) {
   args.push_back(proxy);
   CallExpr = new CallExprAST(Loc, new IdExprAST(Loc, Name::New), args);
 
+  // For class we should also check for constructor call
+  if (isa<ClassTypeAST>(NewType)) {
+    ClassDeclAST* classDecl = (ClassDeclAST*)NewType->getSymbol();
+
+    if (classDecl->Ctor) {
+      // If constructor present we should create it's call
+      // Note: We set this pointer as result of allocMem
+      CallExpr = new CallExprAST(
+        Loc,
+        new MemberAccessExprAST(Loc, classDecl, CallExpr, Name::Ctor), 
+        Args);
+      // We don't need cast in this case because it will be added by constructor's
+      // call
+      NeedCast = false;
+    }
+  }
+
   // Perform semantic for just created call expression
   CallExpr = CallExpr->semantic(scope);
 
@@ -158,6 +175,20 @@ ExprAST* DeleteExprAST::semantic(Scope* scope) {
 
   ExprAST* deleteArg = Val->clone();
   ExprList args;
+  
+  // Check for destructor
+  if (isa<ClassTypeAST>(ptrType->Next)) {
+    ClassDeclAST* classDecl = (ClassDeclAST*)ptrType->Next->getSymbol();
+
+    if (classDecl->Dtor) {
+      // Create destructor's call
+      // Note: We set this pointer to result of Val code generation
+      deleteArg = new CallExprAST(
+        Loc,
+        new MemberAccessExprAST(Loc, classDecl, deleteArg, Name::Dtor),
+        args);
+    }
+  }
 
   // Add argument for freeMem call
   // Note: It can be Val or result of destructor's call
@@ -210,7 +241,20 @@ ExprAST* IdExprAST::semantic(Scope* scope) {
       return nullptr;
     }
 
-    ExprType = ThisSym->getType();
+    if (ThisSym->needThis()) {
+      // Rewrite to this . a
+      IdExprAST* thisExpr = new IdExprAST(Loc, Name::This);
+      PointerAccessExprAST* memberExpr = new PointerAccessExprAST(Loc, thisExpr,
+        Val);
+      ExprAST* resultExpr = memberExpr->semantic(scope);
+      delete this;
+      return resultExpr;
+    }
+
+    // Get type of the found symbol if it's not overload set
+    if (!isa<OverloadSetAST>(ThisSym)) {
+      ExprType = ThisSym->getType();
+    }
   }
 
   return this;
@@ -318,11 +362,38 @@ ExprAST* MemberAccessExprAST::semantic(Scope* scope) {
     // We replace MemberAccessExprAST with IdExprAST with preset values
     IdExprAST* newExpr = new IdExprAST(Loc, MemberName);
 
-    newExpr->ExprType = thisSym->getType();
+    // Get type of the found symbol if it's not overload set
+    if (!isa<OverloadSetAST>(thisSym)) {
+      newExpr->ExprType = thisSym->getType();
+    }
 
     newExpr->ThisSym = thisSym;
     delete this;
     return newExpr;
+  }
+
+  // Special case for aggregate function/member with forced this
+  if (ForceThis) {
+    if (!ThisAggr->isAggregate()) {
+      scope->report(Loc, diag::ERR_SemaNonAggregateForFocedThis);
+      return nullptr;
+    }
+
+    // Try to find name in the aggregate
+    ThisSym = ThisAggr->find(MemberName);
+
+    if (!ThisSym) {
+      scope->report(Loc, diag::ERR_SemaUndefinedMember, MemberName->Id);
+      return nullptr;
+    }
+
+    // Get type of the found symbol if it's not overload set
+    if (!isa<OverloadSetAST>(ThisSym)) {
+      ExprType = ThisSym->getType();
+    }
+
+    SemaDone = true;
+    return this;
   }
   
   if (!Val->ExprType) {
@@ -376,7 +447,10 @@ ExprAST* MemberAccessExprAST::semantic(Scope* scope) {
     return nullptr;
   }
 
-  ExprType = ThisSym->getType();
+  // Get result type if it's not overload set
+  if (!isa<OverloadSetAST>(ThisSym)) {
+    ExprType = ThisSym->getType();
+  }
 
   SemaDone = true;
 
@@ -384,7 +458,11 @@ ExprAST* MemberAccessExprAST::semantic(Scope* scope) {
 }
 
 ExprAST* MemberAccessExprAST::clone() {
-  return new MemberAccessExprAST(Loc, Val->clone(), MemberName);
+  if (ForceThis) {
+    return new MemberAccessExprAST(Loc, ThisAggr, Val->clone(), MemberName);
+  } else {
+    return new MemberAccessExprAST(Loc, Val->clone(), MemberName);
+  }
 }
 
 // PointerAccessExprAST implementation
@@ -1028,12 +1106,147 @@ ExprAST* CondExprAST::clone() {
 }
 
 // CallExprAST implementation
+enum class OverloadCompareKind {
+  Better = -1,
+  Unknown = 0,
+  Worse = 1
+};
+
+enum class OverloadConversionType {
+  Same = 0,
+  PointerToVoid = 1,
+  DerivedToBase = 2,
+  Implicit = 3,
+};
+
+static OverloadConversionType getConversionLevel(TypeAST *arg, TypeAST *param) {
+  if (arg->equal(param)) {
+    return OverloadConversionType::Same;
+  }
+
+  // Check for type*
+  if (isa<PointerTypeAST>(param)) {
+    TypeAST* ptr1 = ((PointerTypeAST*)param)->Next;
+    TypeAST* ptr2 = ((PointerTypeAST*)arg)->Next;
+
+    if (ptr1->isVoid()) {
+      return OverloadConversionType::PointerToVoid;
+    }
+
+    if (ptr1->isAggregate() && ptr1->isBaseOf(ptr2)) {
+      return OverloadConversionType::DerivedToBase;
+    }
+  }
+
+  return OverloadConversionType::Implicit;
+}
+
+static OverloadCompareKind compareConversion(
+  TypeAST *arg,
+  TypeAST *left,
+  TypeAST *right
+) {
+  OverloadConversionType
+    Level1 = getConversionLevel(arg, left),
+    Level2 = getConversionLevel(arg, right);
+
+  if (Level1 != Level2) {
+    if (Level1 == OverloadConversionType::Same) {
+      return OverloadCompareKind::Better;
+    }
+
+    if (Level2 == OverloadConversionType::Same) {
+      return OverloadCompareKind::Worse;
+    }
+  }
+
+  bool ConversionToVoid1 = Level1 == OverloadConversionType::PointerToVoid;
+  bool ConversionToVoid2 = Level2 == OverloadConversionType::PointerToVoid;
+
+  if (ConversionToVoid1 != ConversionToVoid2) {
+    return ConversionToVoid2 ? OverloadCompareKind::Better : OverloadCompareKind::Worse;
+  }
+
+  bool ConversionToBase1 = Level1 == OverloadConversionType::DerivedToBase;
+  bool ConversionToBase2 = Level2 == OverloadConversionType::DerivedToBase;
+
+  if (ConversionToBase1 && ConversionToBase1 == ConversionToBase2) {
+    TypeAST *to1 = ((PointerTypeAST*)left)->Next;
+    TypeAST *to2 = ((PointerTypeAST*)right)->Next;
+
+    if (to1->equal(to2)) {
+      return OverloadCompareKind::Unknown;
+    }
+      
+    if (to1->isBaseOf(to2)) {
+      return OverloadCompareKind::Worse;
+    }
+
+    return OverloadCompareKind::Better;
+  }
+
+  return OverloadCompareKind::Unknown;
+}
+
+static bool isMoreSpecialized(CallExprAST *Call, SymbolAST* func1, SymbolAST* func2) {
+  FuncTypeAST* type1 = (FuncTypeAST*)((FuncDeclAST*)func1)->ThisType;
+  FuncTypeAST* type2 = (FuncTypeAST*)((FuncDeclAST*)func2)->ThisType;
+
+  ExprList::iterator arg = Call->Args.begin();
+  ParameterList::iterator it1 = type1->Params.begin();
+  ParameterList::iterator it2 = type2->Params.begin();
+  ParameterList::iterator end = type1->Params.end();
+
+  if (type1->HasThis) {
+    ++arg;
+    ++it1;
+    ++it2;
+  }
+
+  // Check all arguments
+  bool IsWorse = false;
+  bool IsBetter = false;
+
+  for ( ; it1 != end; ++arg, ++it1, ++it2) {
+    OverloadCompareKind Kind = compareConversion((*arg)->ExprType, (*it1)->Param, (*it2)->Param);
+
+    if (Kind == OverloadCompareKind::Better) {
+      IsBetter = true;
+    } else if (Kind == OverloadCompareKind::Worse) {
+      IsWorse = true;
+    }
+  }
+
+  if (IsBetter && !IsWorse) {
+    return true;
+  }
+
+  return false;
+}
+
+/// Sort predicate for overloaded functions set
+struct OverloadSetSort : std::binary_function< SymbolAST*, SymbolAST*, bool > {
+  OverloadSetSort(CallExprAST *args): Args(args) {}
+  OverloadSetSort(const OverloadSetSort &right): Args(right.Args) {}
+
+  bool operator()(SymbolAST* left, SymbolAST* right) const {
+    // We need to move all most specialized functions 1st to do so we should
+    // return true only if left is more specialized than right and right not
+    // more specialized than left
+    return isMoreSpecialized(Args, left, right) && !isMoreSpecialized(Args, right, left);
+  }
+
+private:
+  CallExprAST* Args;
+};
 
 /// Resolve function \c func call with \c arg as arguments
 /// \param[in] func - function or overload set to call
 /// \param[in] args - arguments to call with
 /// \return Function which should be called
 static SymbolAST* resolveFunctionCall(Scope *scope, SymbolAST* func, CallExprAST* args) {
+  SymbolList listOfValidOverloads;
+
   // We have simple case for only 1 function
   if (isa<FuncDeclAST>(func)) {
     FuncDeclAST* fnc = static_cast< FuncDeclAST* >(func);
@@ -1047,6 +1260,12 @@ static SymbolAST* resolveFunctionCall(Scope *scope, SymbolAST* func, CallExprAST
 
     ExprList::iterator arg = args->Args.begin();
     ParameterList::iterator it = type->Params.begin();
+
+    // If it's class member function then skip 1st argument
+    if (isa<MemberAccessExprAST>(args->Callee)) {
+      ++it;
+      ++arg;
+    }
 
     // Check all arguments
     for (ParameterList::iterator end = type->Params.end(); it != end; ++it, ++arg) {
@@ -1062,7 +1281,92 @@ static SymbolAST* resolveFunctionCall(Scope *scope, SymbolAST* func, CallExprAST
     return func;
   }
 
+  // Ok. It's overload set and we should handle it respectively
+  OverloadSetAST* overloadSet = (OverloadSetAST*)func;
+  size_t numArgs = args->Args.size();
+
+  // Check every function in the overload set
+  for (SymbolList::iterator it = overloadSet->Vars.begin(),
+    end = overloadSet->Vars.end(); it != end; ++it) {
+    FuncDeclAST* fnc = static_cast< FuncDeclAST* >(*it);
+    FuncTypeAST* type = static_cast< FuncTypeAST* >(fnc->ThisType);
+
+    // If number of arguments mismatch ignore this function
+    if (numArgs != type->Params.size()) {
+      continue;
+    }
+
+    ExprList::iterator arg = args->Args.begin();
+    ParameterList::iterator param = type->Params.begin();
+
+    // If it's class member function then skip 1st argument
+    if (isa<MemberAccessExprAST>(args->Callee)) {
+      ++param;
+      ++arg;
+    }
+
+    // We should save valid and exact match
+    bool isValid = true;
+    bool isExact = true;
+
+    // Check every argument
+    for (ParameterList::iterator end = type->Params.end(); param != end; ++param, 
+      ++arg) {
+      // Check for equality 1st
+      if (!(*arg)->ExprType->equal((*param)->Param)) {
+        // It's not exact call, flag it
+        isExact = false;
+        
+        // Check for validity of this argument
+        if (!(*arg)->ExprType->implicitConvertTo((*param)->Param)) {
+          // Argument not valid, flag it and break
+          isValid = false;
+          break;
+        }
+      }
+    }
+
+    // Exact match is preferred
+    if (isExact) {
+      return fnc;
+    }
+
+    // Add only valid functions
+    if (isValid) {
+      listOfValidOverloads.push_back(fnc);
+    }
+  }
+
+  // If we have more than 1 function to call then we should handle it
+  if (listOfValidOverloads.size() > 1) {
+    // Sort all functions and move all most specialized functions to start of
+    // the list
+    std::sort(listOfValidOverloads.begin(), listOfValidOverloads.end(),
+      OverloadSetSort(args));
+
+    SymbolList::iterator it1 = listOfValidOverloads.begin();
+    SymbolList::iterator it2 = listOfValidOverloads.begin() + 1;
+
+    // If 1st function is more specialized than 2nd and 2nd not more specialized
+    // than 1st then we should erase all other functions (we now should have
+    // only 1 function in the list which should be called). Otherwise we will
+    // report error later
+    if (isMoreSpecialized(args, *it1, *it2) && !isMoreSpecialized(args, *it2, *it1)) {
+      listOfValidOverloads.erase(it2, listOfValidOverloads.end());
+    }
+  }
+
+  // If we have more than 1 valid functions then report it
+  if (listOfValidOverloads.size() > 1) {
+    scope->report(args->Loc, diag::ERR_SemaAmbiguousCall);
     return nullptr;
+  // If we don't have any functions to call then report it
+  } else if (listOfValidOverloads.empty()) {
+    scope->report(args->Loc, diag::ERR_SemaInvalidNumberOfArgumentsInCall);
+    return nullptr;
+  }
+
+  return listOfValidOverloads.pop_back_val();
 }
 
 ExprAST* CallExprAST::semantic(Scope* scope) {
@@ -1073,13 +1377,30 @@ ExprAST* CallExprAST::semantic(Scope* scope) {
   // Perform semantic on callee
   Callee = Callee->semantic(scope);
 
-  // We allow only IdExprAST as callee
-  if (isa<IdExprAST>(Callee)) {
-    SymbolAST* sym = ((IdExprAST*)Callee)->ThisSym;
+  // We allow only IdExprAST or MemberAccessAST as callee
+  if (isa<IdExprAST>(Callee) || isa<MemberAccessExprAST>(Callee)) {
+    SymbolAST* sym = (isa<IdExprAST>(Callee)
+      ? ((IdExprAST*)Callee)->ThisSym
+      : ((MemberAccessExprAST*)Callee)->ThisSym);
 
     // Val should point on function
-    if (isa<FuncDeclAST>(sym)) {
+    if (isa<FuncDeclAST>(sym) || isa<OverloadSetAST>(sym)) {
       TypeAST* returnType = nullptr;
+
+      // We have special case for class member function
+      if (isa<MemberAccessExprAST>(Callee)) {
+        MemberAccessExprAST* memAccess = (MemberAccessExprAST*)Callee;
+        
+        // Push this argument
+        ExprAST* thisArg = memAccess->Val->clone();
+        Args.insert(Args.begin(), thisArg);
+
+        // For member access expression with forced this we should set return
+        // type too
+        if (memAccess->ForceThis) {
+          returnType = memAccess->Val->ExprType;
+        }
+      }
 
       for (ExprList::iterator arg = Args.begin(), end = Args.end(); arg != end; 
         ++arg) {
@@ -1095,6 +1416,12 @@ ExprAST* CallExprAST::semantic(Scope* scope) {
         // Done check all arguments
         ExprList::iterator arg = Args.begin();
         ParameterList::iterator it = type->Params.begin();
+
+        // For class function skip 1st argument
+        if (isa<MemberAccessExprAST>(Callee)) {
+          ++arg;
+          ++it;
+        }
 
         // Check all parameters of functions and perform 1 to 1 mapping of 
         // function's parameters to callee arguments
@@ -1132,6 +1459,10 @@ ExprAST* CallExprAST::clone() {
   ExprList exprs;
   ExprList::iterator it = Args.begin();
   ExprList::iterator end = Args.end();
+
+  if (isa<MemberAccessExprAST>(Callee)) {
+    ++it;
+  }
 
   for ( ; it != end; ++it) {
     exprs.push_back((*it)->clone());

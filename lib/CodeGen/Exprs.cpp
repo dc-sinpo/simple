@@ -136,6 +136,119 @@ Value* IndexExprAST::getRValue(SLContext& Context) {
   return Context.TheBuilder->CreateLoad(ExprType->getType(), val);
 }
 
+/// Convert pointer to class to pointer to base class
+/// \param[in] Context - code generator context
+/// \param[in] val - pointer to convert
+/// \param[in] var - symbol of aggregate to convert to
+/// \param[in] agg - symbol of aggregate to convert from
+/// \param[in] canBeNull - true - value \c val can contain null
+Value* convertToBase(SLContext& Context, Value* val, SymbolAST* var, 
+  SymbolAST* agg, bool canBeNull) {
+  ClassDeclAST* thisDecl = (ClassDeclAST*)agg;
+  SymbolAST* baseDecl = thisDecl->BaseClass->getSymbol();
+  bool baseHasVTable = false;
+
+  // If base class is class and not struct then it can have VTable
+  if (isa<ClassDeclAST>(baseDecl)) {
+    ClassDeclAST* baseClassDecl = (ClassDeclAST*)baseDecl;
+    baseHasVTable = baseClassDecl->VTbl != nullptr;
+  }
+  
+  // If base class don't have VTable and this class has then we should make
+  // adjustments
+  if (thisDecl->VTbl && baseHasVTable == false) {
+    // If value can be 0 then we should have some checking before cast
+    if (canBeNull) {
+      // Right now val is the pointer to some derived class. We should check
+      // it for null for safe cast
+      Value* tmp = ConstantPointerNull::get((PointerType*)val->getType());
+      tmp = Context.TheBuilder->CreateICmpNE(val, tmp);
+
+      BasicBlock* thenBlock = BasicBlock::Create(getGlobalContext(), "then",
+        Context.TheFunction);
+      BasicBlock* elseBlock = BasicBlock::Create(getGlobalContext(), "else");
+      BasicBlock* contBlock = BasicBlock::Create(getGlobalContext(), "ifcont");
+
+      tmp = Context.TheBuilder->CreateCondBr(tmp, thenBlock, elseBlock);
+      Context.TheBuilder->SetInsertPoint(thenBlock);
+
+      // 1. Adjust pointer and skip VTable slot
+      val = Context.TheBuilder->CreateGEP(
+        Type::getInt8Ty(getGlobalContext()),
+        val,
+        getConstInt(
+          Context.TheTarget->getTypeAllocSize(
+            PointerType::get(
+              getGlobalContext(),
+              getSLContext().TheTarget->getProgramAddressSpace()
+            )
+          )
+        )
+      );
+
+      // 2. Get real address of base class
+      if (var != baseDecl) {
+        // It has 1 more nesting level. Check it
+        val = convertToBase(Context, val, var, baseDecl, canBeNull);
+      }
+
+      thenBlock = Context.TheBuilder->GetInsertBlock();
+      Context.TheBuilder->CreateBr(contBlock);
+
+      // Note: elseBlock contain only jump and no code
+      Context.TheFunction->getBasicBlockList().push_back(elseBlock);
+      Context.TheBuilder->SetInsertPoint(elseBlock);
+
+      Context.TheBuilder->CreateBr(contBlock);
+
+      Context.TheFunction->getBasicBlockList().push_back(contBlock);
+      Context.TheBuilder->SetInsertPoint(contBlock);
+
+      // Create PHI node with resulted value
+      PHINode* PN = Context.TheBuilder->CreatePHI(val->getType(), 2);
+
+      PN->addIncoming(val, thenBlock);
+      PN->addIncoming(ConstantPointerNull::get((PointerType*)val->getType()), 
+        elseBlock);
+
+      return PN;
+    } else {
+      // Value can't be 0. We don't need any checking
+
+      // 1. Adjust pointer and skip VTable slot
+      val = Context.TheBuilder->CreateGEP(
+        Type::getInt8Ty(getGlobalContext()),
+        val,
+        getConstInt(
+          Context.TheTarget->getTypeAllocSize(
+            PointerType::get(
+              getGlobalContext(),
+              getSLContext().TheTarget->getProgramAddressSpace()
+            )
+          )
+        )
+      );
+
+      // 2. Get real address of base class
+      if (var != baseDecl) {
+        // It has 1 more nesting level. Check it
+        return convertToBase(Context, val, var, baseDecl, canBeNull);
+      }
+
+      return val;
+    }
+  } else {
+    // There is no VTable or both types have VTables
+
+    if (var == baseDecl) {
+      return val;
+    }
+
+    // It has 1 more nesting level. Check it
+    return convertToBase(Context, val, var, baseDecl, canBeNull);
+  }
+}
+
 Value* MemberAccessExprAST::getLValue(SLContext& Context) {
   // For function simply return value
   if (isa<FuncTypeAST>(ExprType)) {
@@ -144,6 +257,12 @@ Value* MemberAccessExprAST::getLValue(SLContext& Context) {
 
   // Generate lvalue for this
   Value* val = Val->getLValue(Context);
+
+  // If symbol's parent not found aggregate then we need convert it to base
+  // class/struct
+  if (ThisSym->Parent != ThisAggr) {
+    val = convertToBase(Context, val, ThisSym->Parent, ThisAggr, false);
+  }
 
   // Generate code for member's offset
   Value* index = getConstInt(((VarDeclAST*)ThisSym)->OffsetOf);
@@ -275,7 +394,20 @@ Value* CastExprAST::getRValue(SLContext& Context) {
     // If converted expression is pointer too then check it
     if (isa<PointerTypeAST>(Val->ExprType)) {
       // Generate rvalue expression
-      return Val->getRValue(Context);
+      Value* val = Val->getRValue(Context);
+
+      TypeAST* next1 = ((PointerTypeAST*)ExprType)->Next;
+      TypeAST* next2 = ((PointerTypeAST*)Val->ExprType)->Next;
+
+      // We have special case for aggregates and their base classes
+      if (next1->isAggregate() && next1->isBaseOf(next2)) {
+        SymbolAST* s1 = next1->getSymbol();
+        SymbolAST* s2 = next2->getSymbol();
+
+        return convertToBase(Context, val, s1, s2, Val->canBeNull());
+      }
+      
+      return val;
     } else if (isa<ArrayTypeAST>(Val->ExprType)) {
       Value* val = Val->getLValue(Context);
       Value* tmp = getConstInt(0);
@@ -713,6 +845,7 @@ Value* CallExprAST::getRValue(SLContext& Context) {
   Value* callee = nullptr;
   std::vector< Value* > args;
   ExprList::iterator it = Args.begin();
+  Value* forcedReturn = nullptr;
 
   // Check is it virtual call or not
   assert(isa<FuncDeclAST>(CallFunc));
@@ -721,14 +854,119 @@ Value* CallExprAST::getRValue(SLContext& Context) {
   assert(isa<FunctionType>(funcRawType));
   FunctionType* funcType = static_cast<FunctionType*>(funcRawType);
 
-  // It's regular function call
-  callee = CallFunc->getValue(Context);
+  if (funcDecl->isVirtual() || funcDecl->isOverride()) {
+    // It's virtual function perform virtual call
+    assert(isa<MemberAccessExprAST>(Callee));
+    MemberAccessExprAST* memAccess = (MemberAccessExprAST*)Callee;
+
+    // We should check is Callee pointer or not
+    if (isa<DerefExprAST>(memAccess->Val)) {
+      // It's dereference. Now we should check was it super or not. Because we
+      // should make sure that super not use virtual calls
+      DerefExprAST* derefExpr = (DerefExprAST*)memAccess->Val;
+
+      if ((isa<IdExprAST>(derefExpr->Val) && 
+        ((IdExprAST*)derefExpr->Val)->Val == Name::Super)) {
+        // It's call with super as this parameter. Call it as non virtual function
+        callee = CallFunc->getValue(Context);
+      } else {
+        // It's virtual function. Make virtual call
+
+        // Get this pointer
+        callee = memAccess->Val->getLValue(Context);
+
+        // Virtual functions table is always 1st member. But we still need cast
+        // this to class with function
+        PointerType* ptrType = PointerType::get(
+          getGlobalContext(),
+          getSLContext().TheTarget->getProgramAddressSpace()
+        );
+
+        // Load virtual functions table
+        callee = Context.TheBuilder->CreateLoad(ptrType, callee);
+        // Get function from virtual functions table by it's index
+        callee = Context.TheBuilder->CreateGEP(
+          ptrType,
+          callee,
+          getConstInt(((FuncDeclAST*)CallFunc)->OffsetOf)
+        );
+        callee = Context.TheBuilder->CreateLoad(ptrType, callee);
+      }
+    } else {
+      if (memAccess->ForceThis) {
+        // It's virtual function. Make virtual call
+
+        // Get this pointer
+        callee = memAccess->Val->getRValue(Context);
+
+        // Virtual functions table is always 1st member. But we still need cast
+        // this to class with function
+        PointerType* ptrType = PointerType::get(
+          getGlobalContext(),
+          getSLContext().TheTarget->getProgramAddressSpace()
+        );
+
+        // Load virtual functions table
+        callee = Context.TheBuilder->CreateLoad(ptrType, callee);
+        // Get function from virtual functions table by it's index
+        callee = Context.TheBuilder->CreateGEP(
+          ptrType,
+          callee,
+          getConstInt(((FuncDeclAST*)CallFunc)->OffsetOf)
+        );
+        callee = Context.TheBuilder->CreateLoad(ptrType, callee);
+      } else {
+        // It's not pointer. Use regular function call
+        callee = CallFunc->getValue(Context);
+      }
+    }
+  } else {
+    // It's regular function call
+    callee = CallFunc->getValue(Context);
+  }
+  
+  // We have special case for class member function
+  if (isa<MemberAccessExprAST>(Callee)) {
+    MemberAccessExprAST* memAccess = (MemberAccessExprAST*)Callee;
+    // Check for forced this
+    if (!memAccess->ForceThis) {
+      // It's not forced this. Get lvalue from left part of member access
+      // expression
+      Value* val = (*it)->getLValue(Context);
+      MemberAccessExprAST* memAccess = (MemberAccessExprAST*)Callee;
+
+      // Perform conversion from derived class to base class if needed
+      if (memAccess->ThisSym->Parent != memAccess->ThisAggr) {
+        val = convertToBase(Context, val, memAccess->ThisSym->Parent,
+          memAccess->ThisAggr, false);
+      }
+
+      // Add this parameter
+      args.push_back(val);
+      ++it;
+    } else {
+      // Special case for member access with forced this
+      MemberAccessExprAST* memAccess = (MemberAccessExprAST*)Callee;
+      assert(memAccess->ThisSym->Parent == memAccess->ThisAggr);
+      forcedReturn = (*it)->getRValue(Context);
+
+      // Add this parameter
+      args.push_back(forcedReturn);
+      ++it;
+    }
+  }
 
   // Perform code generation for every function parameter
   for (ExprList::iterator end = Args.end(); it != end; ++it) {
     Value* v = (*it)->getRValue(Context);
     args.push_back(v);
   }
+
+  if (forcedReturn) {
+    // It's forced this. Create call and return calculated return value
+    Context.TheBuilder->CreateCall(funcType, callee, args);
+    return forcedReturn;
+  } 
   
   // Generate function's call
   return Context.TheBuilder->CreateCall(funcType, callee, args);

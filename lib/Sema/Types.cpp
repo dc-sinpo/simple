@@ -41,6 +41,10 @@ void TypeAST::calcMangle() {
   MangleName = pos->getKeyData();
 }
 
+bool TypeAST::isBaseOf(TypeAST* ) {
+  return false;
+}
+
 bool TypeAST::equal(TypeAST* otherType) {
   // equal only valid if 2 types have MangleName
   // note: We check types equivalence by their mangle name and not their 
@@ -107,6 +111,12 @@ void BuiltinTypeAST::toMangleBuffer(llvm::raw_ostream& output) {
 TypeAST* ArrayTypeAST::semantic(Scope* scope) {
 // Check semantic of inner type
   Next = Next->semantic(scope);
+
+  // Disable array of class
+  if (isa<ClassTypeAST>(Next)) {
+    scope->report(SMLoc(), diag::ERR_SemaArrayOfClassUnsupported);
+    return nullptr;
+  }
 
   // Calculate MangleName
   calcMangle();
@@ -188,6 +198,13 @@ bool PointerTypeAST::implicitConvertTo(TypeAST* newType) {
     return true;
   }
 
+  // If inner types are aggregates then we should check is next2 base of
+  // Next or not.
+  // Note: Only 1 level of nested pointers are allowed for aggregates
+  if (Next->isAggregate() && next2->isAggregate()) {
+    return next2->isBaseOf(Next);
+  }
+
   TypeAST* next1 = Next;
 
   // We allow conversion of any type* to void*
@@ -244,7 +261,73 @@ void StructTypeAST::toMangleBuffer(llvm::raw_ostream& output) {
   mangleAggregateName(output, ThisDecl);
 }
 
+bool StructTypeAST::isBaseOf(TypeAST* type) {
+  // if type isn't class then this can't be it's base
+  if (!isa<ClassTypeAST>(type)) {
+    return false;
+  }
+
+  ClassTypeAST* classType = (ClassTypeAST*)type;
+  ClassDeclAST* classDecl = (ClassDeclAST*)classType->ThisDecl;
+
+  // If this and base class of type are same then we are done
+  if (classDecl->BaseClass && this->equal(classDecl->BaseClass)) {
+    return true;
+  }
+
+  // Check is this base class of type's base class or not
+  if (classDecl->BaseClass) {
+    return isBaseOf(classDecl->BaseClass);
+  }
+
+  return false;
+}
+
 SymbolAST* StructTypeAST::getSymbol() {
+  return ThisDecl;
+}
+
+// ClassTypeAST implementation
+TypeAST* ClassTypeAST::semantic(Scope* scope) {
+  calcMangle();
+  return this;
+}
+
+bool ClassTypeAST::implicitConvertTo(TypeAST* newType) {
+  if (newType->equal(this)) {
+    return true;
+  }
+  
+  return false;
+}
+
+void ClassTypeAST::toMangleBuffer(llvm::raw_ostream& output) {
+  mangleAggregateName(output, ThisDecl);
+}
+
+bool ClassTypeAST::isBaseOf(TypeAST* type) {
+  // if type isn't class then this can't be it's base
+  if (!isa<ClassTypeAST>(type)) {
+    return false;
+  }
+
+  ClassTypeAST* classType = (ClassTypeAST*)type;
+  ClassDeclAST* classDecl = (ClassDeclAST*)classType->ThisDecl;
+
+  // If this and base class of type are same then we are done
+  if (classDecl->BaseClass && this->equal(classDecl->BaseClass)) {
+    return true;
+  }
+
+  // Check is this base class of type's base class or not
+  if (classDecl->BaseClass) {
+    return isBaseOf(classDecl->BaseClass);
+  }
+
+  return false;
+}
+
+SymbolAST* ClassTypeAST::getSymbol() {
   return ThisDecl;
 }
 
@@ -290,6 +373,17 @@ void FuncTypeAST::toMangleBuffer(llvm::raw_ostream& output) {
   }
   
   ParameterList::iterator it = Params.begin(), end = Params.end();
+
+  // Skip this parameter
+  if (HasThis) {
+    ++it;
+  }
+
+  // Append v if function has 0 parameters beside this
+  if (it == end) {
+    output << "v";
+    return;
+  }
 
   // Write parameters' types to mangle buffer 
   for ( ; it != end; ++it) {

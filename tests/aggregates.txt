@@ -1,25 +1,25 @@
-fn checkF(s: string, a: float, b: float) {
+fn check(s: string, a: float, b: float) {
   if a == b {
-    printString(s);
-    printString(" ");
+    print(s);
+    print(" ");
     printLn("Pass");
   }
   else {
-    printString(s);
-    printString(" ");
+    print(s);
+    print(" ");
     printLn("Fail");
   }
 }
 
-fn checkS(s: string, a: string, b: string) {
+fn check(s: string, a: string, b: string) {
   if strCmp(a, b) == 0 {
-    printString(s);
-    printString(" ");
+    print(s);
+    print(" ");
     printLn("Pass");
   }
   else {
-    printString(s);
-    printString(" ");
+    print(s);
+    print(" ");
     printLn("Fail");
   }
 }
@@ -42,14 +42,11 @@ struct A {
   c: float;
 }
 
-struct B {
-  a: int;
-  b: int;
-  c: float;
+class B extends A {
   str: string;
 }
 
-struct C {
+class C {
   a: A;
   b: B;
 }
@@ -73,10 +70,10 @@ fn main() : float {
     s.c = 3.0;
     s.str = "Hello";
 
-    checkF("s.a", s.a, 1);
-    checkF("s.b", s.b, 2);
-    checkF("s.c", s.c, 3);
-    checkS("s.str", s.str, "Hello");
+    check("s.a", s.a, 1);
+    check("s.b", s.b, 2);
+    check("s.c", s.c, 3);
+    check("s.str", s.str, "Hello");
   }
   printLn("");
   {
@@ -92,13 +89,13 @@ fn main() : float {
     s.b.c = 6.0;
     s.b.str = "Hi";
 
-    checkF("s.a.a", s.a.a, 1);
-    checkF("s.a.b", s.a.b, 2);
-    checkF("s.a.c", s.a.c, 3);
-    checkF("s.b.a", s.b.a, 4);
-    checkF("s.b.b", s.b.b, 5);
-    checkF("s.b.c", s.b.c, 6);
-    checkS("s.b.str", s.b.str, "Hi");
+    check("s.a.a", s.a.a, 1);
+    check("s.a.b", s.a.b, 2);
+    check("s.a.c", s.a.c, 3);
+    check("s.b.a", s.b.a, 4);
+    check("s.b.b", s.b.b, 5);
+    check("s.b.c", s.b.c, 6);
+    check("s.b.str", s.b.str, "Hi");
   }
   printLn("");
   {
@@ -110,9 +107,9 @@ fn main() : float {
     a[0].b = 2;
     a[0].c = 40;
 
-    checkF("a[0].a", a[0].a, 20);
-    checkF("a[0].b", a[0].b, 2);
-    checkF("a[0].c", a[0].c, 40);
+    check("a[0].a", a[0].a, 20);
+    check("a[0].b", a[0].b, 2);
+    check("a[0].c", a[0].c, 40);
 
     let b: E[2];
 
@@ -120,18 +117,18 @@ fn main() : float {
     b[0].a[1].b = 22;
     b[0].a[1].c = 23;
 
-    checkF("b[0].a[1].a", b[0].a[1].a, 21);
-    checkF("b[0].a[1].b", b[0].a[1].b, 22);
-    checkF("b[0].a[1].c", b[0].a[1].c, 23);
+    check("b[0].a[1].a", b[0].a[1].a, 21);
+    check("b[0].a[1].b", b[0].a[1].b, 22);
+    check("b[0].a[1].c", b[0].a[1].c, 23);
 
-    checkF("++b[0].a[1].a", ++b[0].a[1].a, 22);
-    checkF("b[0].a[1].b++", b[0].a[1].b++, 22);
+    check("++b[0].a[1].a", ++b[0].a[1].a, 22);
+    check("b[0].a[1].b++", b[0].a[1].b++, 22);
 
     let e: EE[1];
 
     e[0].a[0][1].a[0].a = 20;
 
-    checkF("++e[0].a[0][1].a[0].a", ++e[0].a[0][1].a[0].a, 21);
+    check("++e[0].a[0][1].a[0].a", ++e[0].a[0][1].a[0].a, 21);
   }
   
   return 0.0;

@@ -1,0 +1,90 @@
+fn check(s: string, a: float, b: float) {
+  if (a == b) {
+    print(s);
+    print(" ");
+    printLn("Pass");
+  }
+  else {
+    print(s);
+    print(" ");
+    printLn("Fail");
+  }
+}
+
+class A {
+  virt foo() : int {
+    return 1;
+  }
+
+  virt bar() : int {
+    return 1;
+  }
+
+  virt baz() : int {
+    return 1;
+  }
+}
+
+class B extends A {
+  impl foo() : int {
+    return super.foo() * 10 + 2;
+  }
+
+  impl baz() : int {
+    return super.baz() * 10 + 2;
+  }
+}
+
+class C extends B {
+  impl foo() : int {
+    return super.foo() * 10 + 3;
+  }
+
+  impl bar() : int {
+    return super.bar() * 10 + 3;
+  }
+}
+
+class D extends C {
+  virt boo() : int {
+    return 4;
+  }
+
+  impl baz() : int {
+    return super.baz() * 10 + 4;
+  }
+}
+
+class E extends D {
+  impl foo() : int {
+    return super.foo() * 10 + 5;
+  }
+
+  impl boo() : int {
+    return super.boo() * 10 + 5;
+  }
+}
+
+fn main() : float {
+  {
+    printLn("virtual calls test");
+
+    let c: C;
+
+    check("c.foo()", c.foo(), 123);
+    check("c.bar()", c.bar(), 13);
+    check("c.baz()", c.baz(), 12);
+
+    let e: E;
+
+    check("e.boo()", e.boo(), 45);
+
+    let pa: A* = &e;
+
+    check("pa.foo()", pa.foo(), 1235);
+    check("pa.bar()", pa.bar(), 13);
+    check("pa.baz()", pa.baz(), 124);
+  }
+
+  return 0.0;
+}

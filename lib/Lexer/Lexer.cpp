@@ -27,8 +27,12 @@ void NamesMap::addKeywords() {
   addName(StringRef(TEXT), tok::NAME);
 #include "simple/Basic/TokenKinds.def"
 
+  Name::This = getName("this");
+  Name::Super = getName("super");
   Name::New = getName("new");
   Name::Delete = getName("delete");
+  Name::Ctor = addName("__ctor", tok::Identifier);
+  Name::Dtor = addName("__dtor", tok::Identifier);
 
   IsInit = true;
 }
@@ -292,7 +296,7 @@ void Lexer::next(Token &Result) {
       case '"': {
         llvm::SmallString<32> str;
 
-        while (*p != 0) {
+        while (*p) {
           if (*p == '"') {
             // If it's " then we are done
             if (p[1] != '"') {

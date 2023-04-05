@@ -1,0 +1,66 @@
+class A {
+  a: int;
+  b: int;
+}
+
+class B {
+  c: int;
+  d: int;
+}
+
+class C extends A {
+  virt foo() {
+  }
+
+  e: int;
+}
+
+fn printIntVal(s: string, val: int) {
+  print(s);
+  print(val);
+  printLn("");
+}
+
+fn printA(pa: A*) {
+  printIntVal("A.a=", pa.a);
+  printIntVal("A.b=", pa.b);
+}
+
+fn printB(pb: B*) {
+  printIntVal("B.c=", pb.c);
+  printIntVal("B.d=", pb.d);
+}
+
+fn printC(pc: C*) {
+  printA(pc);
+  printIntVal("C.e=", pc.e);
+}
+
+fn main() : float {
+  let c: C;
+  let pc: C* = &c;
+  let pa: A* = pc; 
+  let b: B;
+  let pb: B* = &b;
+
+  c.a = 10;
+  c.b = 20;
+  c.e = 30;
+
+  b.c = 40;
+  b.d = 50;
+
+  printLn("printA(pa)");
+  printA(pa);
+
+  printLn("printA(pc)");
+  printA(pc);
+  
+  printLn("printC(pc)");
+  printC(pc);
+
+  printLn("printB(pb)");
+  printB(pb);
+
+  return 0.0;
+}

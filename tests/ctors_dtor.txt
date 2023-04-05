@@ -1,0 +1,38 @@
+class A {
+  new(n: int) {
+    print("A.__ctor(");
+    print(n);
+    printLn(")");
+  }
+
+  new(s: string) {
+    print("A.__ctor(""");
+    print(s);
+    printLn(""")");
+  }
+
+  del() {
+    printLn("A.__dtor()");
+  }
+}
+
+class B extends A {
+  new() : super(10) {
+  }
+
+  new(s: string): super(s) {
+  }
+}
+
+class C {
+  a: B;
+}
+
+fn main() : float {
+  let a: A("Hello");
+  let b: B("Hi");
+  let c: B;
+  let d: C;
+
+  return 0.0;
+}

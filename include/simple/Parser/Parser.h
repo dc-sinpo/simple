@@ -52,13 +52,15 @@ public:
   ModuleDeclAST *parseModule();
 
   /// Parse function declaration
-  SymbolList parseFuncDecl();
+  /// \param[in] isClassMember - true - if it's class member
+  SymbolList parseFuncDecl(bool isClassMember);
 
   /// Parse function's prototype
   SymbolAST *parseFuncProto();
 
   /// Parse declarations
-  SymbolList parseDecls();
+  /// \param[in] isClassMember - true - if it's class member
+  SymbolList parseDecls(bool isClassMember);
 
   /// Parse variable declaration
   /// \param[in] needSemicolon - true if ; should be at the end of the

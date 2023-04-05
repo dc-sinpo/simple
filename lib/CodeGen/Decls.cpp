@@ -22,6 +22,11 @@ Value* VarDeclAST::generateCode(SLContext& Context) {
   // Get address of variable and generate code for an initialization
   Value* val = getValue(Context);
 
+  // Special case for class variables with constructors
+  if (Val && isa<ClassTypeAST>(ThisType)) {
+    Val->getRValue(Context);
+    return val;
+  }
 
   // If we have initialization we should generate code for it
   if (Val) {
@@ -90,6 +95,103 @@ Value* StructDeclAST::generateCode(SLContext& Context) {
   return nullptr;
 }
 
+Value* VTableAST::generateCode(SLContext& Context) {
+  if (CodeValue) {
+    return CodeValue;
+  }
+
+  // Allocate virtual table (all slots will be filled later)
+  std::vector< Constant* > vtblEntries(CurOffset);
+
+  // Check every function and overload set in the virtual table
+  for (SymbolMap::iterator it = Decls.begin(), end = Decls.end();
+    it != end; ++it) {
+    if (isa<OverloadSetAST>(it->second)) {
+      // It's overload set
+      OverloadSetAST* overloadSet = (OverloadSetAST*)it->second;
+
+      // Check every function in the overload set
+      for (SymbolList::iterator it2 = overloadSet->Vars.begin(),
+        end2 = overloadSet->Vars.end(); it2 != end2; ++it2) {
+        FuncDeclAST* fnc = (FuncDeclAST*)*it2;
+        // Add function to the appropriate slot
+        vtblEntries[fnc->OffsetOf] = ConstantExpr::getBitCast(
+          (Function*)fnc->getValue(Context),
+          PointerType::get(
+            getGlobalContext(),
+            getSLContext().TheTarget->getProgramAddressSpace()
+          )
+        );
+      }
+    } else {
+      // It's function
+      FuncDeclAST* fnc = (FuncDeclAST*)it->second;
+      // Add function to the appropriate slot
+      vtblEntries[fnc->OffsetOf] = ConstantExpr::getBitCast(
+        (Function*)fnc->getValue(Context),
+        PointerType::get(
+          getGlobalContext(),
+          getSLContext().TheTarget->getProgramAddressSpace()
+        )
+      );
+    }
+  }
+
+  llvm::SmallString< 128 > s;
+  llvm::raw_svector_ostream output(s);
+
+  // Generate name for virtual function's table
+  output << "_PTV";
+  mangleAggregateName(output, Parent);
+
+  // Create array of int8*
+  ArrayType* tableType = ArrayType::get(
+    PointerType::get(
+      getGlobalContext(),
+      getSLContext().TheTarget->getProgramAddressSpace()
+    ),
+    CurOffset
+  );
+  // Insert virtual table value to the global list of variables
+  GlobalVariable* val = (GlobalVariable*)Context.TheModule->getOrInsertGlobal(
+    output.str(), tableType);
+  // Set virtual function's table data
+  val->setInitializer(ConstantArray::get(tableType, vtblEntries));
+  VTblType = tableType;
+
+  return CodeValue = val;
+}
+
+
+llvm::Value* ClassDeclAST::getValue(SLContext& Context) {
+  ThisType->getType();
+
+  if (BaseClass) {
+    BaseClass->getType();
+  }
+
+  return nullptr;
+}
+
+llvm::Value* ClassDeclAST::generateCode(SLContext& Context) {
+  assert(SemaState >= 5);
+  getValue(Context);
+
+  // Generate code for VTable if needed
+  if (VTbl) {
+    VTbl->generateCode(Context);
+  }
+
+  // Generate code for every struct/class or function declaration in the class
+  for (SymbolList::iterator it = Vars.begin(), end = Vars.end(); it != end; ++it) {
+    if (!isa<VarDeclAST>(*it)) {
+      (*it)->generateCode(Context);
+    }
+  }
+
+  return nullptr;
+}
+
 llvm::Value* ParameterSymbolAST::getValue(SLContext& Context) {
   // We should create value only once
   if (Param->CodeValue) {
@@ -119,9 +221,18 @@ Value* FuncDeclAST::getValue(SLContext& Context) {
 
   // Generate function name (we have special case for main)
   if (!(Id->Length == 4 && memcmp(Id->Id, "main", 4) == 0)) {
-    // Generate only mangle name
-    output << "_P" << Id->Length << StringRef(Id->Id, Id->Length);
-    ThisType->toMangleBuffer(output);
+    if (needThis()) {
+      // For aggregate members we should generate fully qualified name
+      assert(AggregateSym);
+      output << "_P";
+      mangleAggregateName(output, AggregateSym);
+      output << Id->Length << StringRef(Id->Id, Id->Length);
+      ThisType->toMangleBuffer(output);
+    } else {
+      // Generate only mangle name
+      output << "_P" << Id->Length << StringRef(Id->Id, Id->Length);
+      ThisType->toMangleBuffer(output);
+    }
   } else {
     output << "main";
   }
@@ -192,11 +303,160 @@ Value* FuncDeclAST::generateCode(SLContext& Context) {
   LandingPad->ReturnLoc = BasicBlock::Create(getGlobalContext(), "return.block");
   LandingPad->FallthroughLoc = LandingPad->ReturnLoc;
 
+  // Create cleanup variable if needed
+  if (LandingPad->NeedCleanup) {
+    LandingPad->CleanupValue = Context.TheBuilder->CreateAlloca(
+      Type::getInt32Ty(getGlobalContext()),
+      0U,
+      "cleanup.value"
+    );
+  }
+
   Function* oldFunction = Context.TheFunction;
   Context.TheFunction = CodeValue;
 
-  // Generate code for function's body
-  Body->generateCode(Context);
+  if (isCtor()) {
+    // We have special case for constructor
+    assert(isa<BlockStmtAST>(Body));
+    assert(isa<ClassDeclAST>(Parent));
+    BlockStmtAST* blockStmt = (BlockStmtAST*)Body;
+    ClassDeclAST* classDecl = (ClassDeclAST*)Parent;
+    VTableAST* parentVtbl = nullptr;
+
+    StmtList::iterator it = blockStmt->Body.begin();
+    StmtList::iterator end = blockStmt->Body.end();
+
+    // If we have base class and it's class and not structure then we probably
+    // have virtual functions table
+    if (classDecl->BaseClass) {
+      // 1st instruction is super variable declaration
+      (*it)->generateCode(Context);
+      ++it;
+      
+      if (isa<ClassTypeAST>(classDecl->BaseClass)) {
+        ClassDeclAST* baseDecl = (ClassDeclAST*)classDecl->BaseClass->getSymbol();
+        parentVtbl = baseDecl->VTbl;
+
+        // Base class can have no constructor. Check it
+        if (baseDecl->Ctor) {
+          // We have. Generate code for it's call and advance to next instruction
+          (*it)->generateCode(Context);
+          ++it;
+        }
+      }
+    }
+
+    // If our virtual table not equal to base class virtual table then we should
+    // generate code for it
+    if (classDecl->VTbl != parentVtbl) {
+      SymbolAST* thisParam = find(Name::This);
+      assert(thisParam != nullptr);
+      // Generate code for this parameter and load it
+      Value* val = thisParam->getValue(Context);
+
+      val = Context.TheBuilder->CreateLoad(
+        PointerType::get(
+          getGlobalContext(),
+          getSLContext().TheTarget->getProgramAddressSpace()
+        ),
+        val
+      );
+      
+      // Generate code for virtual function's table
+      Value* vtblVal = classDecl->VTbl->generateCode(Context);
+
+      std::vector< Value* > idx;
+
+      idx.push_back(getConstInt(0));
+      idx.push_back(getConstInt(0));
+
+      // Generate GetElementPtr instruction to get virtual table from globals
+      vtblVal = Context.TheBuilder->CreateInBoundsGEP(classDecl->VTbl->VTblType, vtblVal, idx);
+      // Store virtual table in the class instance
+      val = Context.TheBuilder->CreateStore(vtblVal, val);
+    }
+
+    // Generate code for rest of the function
+    blockStmt->generatePartialCode(Context, it, end);
+  } else if (isDtor()) {
+    // We have special case for destructor
+    assert(isa<BlockStmtAST>(Body));
+    assert(isa<ClassDeclAST>(Parent));
+    BlockStmtAST* blockStmt = (BlockStmtAST*)Body;
+    ClassDeclAST* classDecl = (ClassDeclAST*)Parent;
+
+    // If we have base class we should check for call of it's destructor
+    if (classDecl->BaseClass && isa<ClassTypeAST>(classDecl->BaseClass)) {
+      ClassDeclAST* baseDecl = (ClassDeclAST*)classDecl->BaseClass->getSymbol();
+
+      // We have special case if we need base class destructor call
+      if (baseDecl->Dtor) {
+        StmtList::iterator it = blockStmt->Body.begin();
+        StmtList::iterator end = blockStmt->Body.end();
+        --end;
+
+        // For destructor we should create new fall through location because
+        // it can be used during generatePartialCode call
+        BasicBlock* falthroughBB = BasicBlock::Create(getGlobalContext());
+        LandingPad->FallthroughLoc = falthroughBB;
+
+        // Generate code for all members but last
+        blockStmt->generatePartialCode(Context, it, end);
+
+        // Add or delete fall through block
+        if (falthroughBB->hasNUsesOrMore(1)) {
+          CodeValue->getBasicBlockList().push_back(falthroughBB);
+          Context.TheBuilder->SetInsertPoint(falthroughBB);
+        } else {
+          delete falthroughBB;
+        }
+
+        // Set fall through location back to return location
+        LandingPad->FallthroughLoc = LandingPad->ReturnLoc;
+
+        // Current instruction should be destructor call. Before it's call
+        // we should adjust VTbl (we should make sure that they are different,
+        // but if base class doesn't have VTbl do nothing)
+        if (classDecl->VTbl != baseDecl->VTbl && baseDecl->VTbl) {
+          SymbolAST* thisParam = find(Name::This);
+          assert(!thisParam);
+          // Generate code for this parameter and load it
+          Value* val = thisParam->getValue(Context);
+          val = Context.TheBuilder->CreateLoad(
+            PointerType::get(
+              getGlobalContext(),
+              getSLContext().TheTarget->getProgramAddressSpace()
+            ),
+            val
+          );
+          // Generate code for base class virtual function's table
+          Value* vtblVal = baseDecl->VTbl->generateCode(Context);
+
+          std::vector< Value* > idx;
+
+          idx.push_back(getConstInt(0));
+          idx.push_back(getConstInt(0));
+
+          // Generate GetElementPtr instruction to get virtual table from globals
+          vtblVal = Context.TheBuilder->CreateInBoundsGEP(baseDecl->VTbl->VTblType, vtblVal, idx);
+          // Store virtual table in the class instance
+          val = Context.TheBuilder->CreateStore(vtblVal, val);
+        }
+
+        // Generate code for base class destructor's call
+        (*end)->generateCode(Context);
+      } else {
+        // We don't need any special handling here
+        Body->generateCode(Context);
+      }
+    } else {
+      // We don't need any special handling here
+      Body->generateCode(Context);
+    }
+  } else {
+    // Generate code for function's body
+    Body->generateCode(Context);
+  }
  
   Context.TheFunction = oldFunction;
 
@@ -224,6 +484,21 @@ Value* FuncDeclAST::generateCode(SLContext& Context) {
   // Restore old insert point if needed
   if (oldBlock) {
     Context.TheBuilder->SetInsertPoint(oldBlock);
+  }
+
+  Function::BasicBlockListType &blocksList = CodeValue->getBasicBlockList();
+
+  for (Function::BasicBlockListType::iterator it = blocksList.begin(), lastBlock = blocksList.end();
+    it != lastBlock; ) {
+    if (!it->getTerminator()) {
+      Function::BasicBlockListType::iterator cur = it;
+
+      ++it;
+
+      blocksList.erase(cur);
+    } else {
+      ++it;
+    }
   }
 
   // Verify function's body and run optimization

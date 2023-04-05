@@ -1,0 +1,287 @@
+fn check(s: string, a: float, b: float) {
+  if (a == b) {
+    print(s);
+    print(" ");
+    printLn("Pass");
+  }
+  else {
+    print(s);
+    print(" ");
+    printLn("Fail");
+  }
+}
+
+fn check(s: string, a: string, b: string) {
+  if (strCmp(a, b) == 0) {
+    print(s);
+    print(" ");
+    printLn("Pass");
+  }
+  else {
+    print(s);
+    print(" ");
+    printLn("Fail");
+  }
+}
+
+fn strCmp(str1: string, str2: string) : int {
+  let p1: string = str1;
+  let p2: string = str2;
+
+  while ((*p1 && *p2) && (*p1 == *p2)) {
+    ++p1;
+    ++p2;
+  }
+
+  return *p1 - *p2;
+}
+
+fn foo() : string {
+  return "foo()";
+}
+
+fn foo(_: int) : string {
+  return "foo(int)";
+}
+
+fn foo(_: float) : string {
+  return "foo(float)";
+}
+
+fn foo(_: string) : string {
+  return "foo(string)";
+}
+
+class A {
+}
+
+class B extends A {
+}
+
+class C extends B {
+}
+
+class E extends C {
+}
+
+class D {
+  fn foo() : string {
+    return "D.foo()";
+  }
+
+  fn foo(_: int) : string {
+    return "D.foo(int)";
+  }
+
+  fn foo(_: float) : string {
+    return "D.foo(float)";
+  }
+
+  fn foo(_: string) : string {
+    return "D.foo(string)";
+  }
+
+  fn foo(_: void*) : string {
+    return "D.foo(void*)";
+  }
+
+  fn foo(_: A*) : string {
+    return "D.foo(A*)";
+  }
+
+  fn foo(_: B*) : string {
+    return "D.foo(B*)";
+  }
+
+  fn foo(_: int*) : string {
+    return "D.foo(int*)";
+  }
+
+  fn foo(_: int[10]) : string {
+    return "D.foo(int[10])";
+  }
+
+  fn foo(_: int, _: int) : string {
+    return "D.foo(int, int)";
+  }
+
+  fn foo(_: A*, _: void*) : string {
+    return "D.foo(A*, void*)";
+  }
+
+  fn foo(_: B*, _: C*) : string {
+    return "D.foo(B*, C*)";
+  }
+
+  fn foo(_: A*, _: C*) : string {
+    return "D.foo(A*, C*)";
+  }
+
+  fn foo(_: void*, _: void*) : string {
+    return "D.foo(void*, void*)";
+  }
+
+  fn foo(_: string, _: string) : string {
+    return "D.foo(string, string)";
+  }
+
+  fn foo(_: string, _: char*) : string {
+    return "D.foo(string, char*)";
+  }
+}
+
+fn foo(_: void*) : string {
+  return "foo(void*)";
+}
+
+fn foo(_: A*) : string {
+  return "foo(A*)";
+}
+
+fn foo(_: B*) : string {
+  return "foo(B*)";
+}
+
+fn foo(_: int*) : string {
+  return "foo(int*)";
+}
+
+fn foo(_: int[10]) : string {
+  return "foo(int[10])";
+}
+
+fn foo(_: int, _: int) : string {
+  return "foo(int, int)";
+}
+
+fn foo(_: A*, _: void*) : string {
+  return "foo(A*, void*)";
+}
+
+fn foo(_: B*, _: C*) : string {
+  return "foo(B*, C*)";
+}
+
+fn foo(_: A*, _: C*) : string {
+  return "foo(A*, C*)";
+}
+
+fn foo(_: void*, _: void*) : string {
+  return "foo(void*, void*)";
+}
+
+fn foo(_: string, _: string) : string {
+  return "foo(string, string)";
+}
+
+fn foo(_: string, _: char*) : string {
+  return "foo(string, char*)";
+}
+
+fn main() : float {
+  {
+    printLn("function overloading tests");
+    check("foo()", foo(), "foo()");
+    check("foo(10)", foo(10), "foo(int)");
+    check("foo(11.0)", foo(11.0), "foo(float)");
+    check("foo(""Hello"")", foo("Hello"), "foo(string)");
+
+    let p: char*;
+    let sa: char[10];
+
+    check("foo(p)", foo(p), "foo(string)");
+    check("foo(sa)", foo(sa), "foo(string)");
+
+    let pa: A*;
+    let pb: B*;
+    let pc: C*;
+    let pd: D*;
+
+    check("foo(pa)", foo(pa), "foo(A*)");
+    check("foo(pb)", foo(pb), "foo(B*)");
+    check("foo(pc)", foo(pc), "foo(B*)");
+    check("foo(pd)", foo(pd), "foo(void*)");
+
+    let pi: int*;
+    let ai: int[10];
+    let ai2: int[20];    
+
+    check("foo(pi)", foo(pi), "foo(int*)");
+    check("foo(ai)", foo(ai), "foo(int[10])");
+    check("foo(ai2)", foo(ai2), "foo(int*)");
+
+    let pf: float*;
+    let af: float[10];
+
+    check("foo(pf)", foo(pf), "foo(void*)");
+    check("foo(af)", foo(af), "foo(void*)");
+
+    check("foo(10, 20)", foo(10, 20), "foo(int, int)");
+    check("foo(pa, pb)", foo(pa, pb), "foo(A*, void*)");
+    check("foo(pa, pc)", foo(pa, pc), "foo(A*, C*)");
+    check("foo(pb, pc)", foo(pb, pc), "foo(B*, C*)");
+    check("foo(pc, pc)", foo(pc, pc), "foo(B*, C*)");
+
+    let pe: E*;
+
+    check("foo(pf, pa)", foo(pf, pa), "foo(void*, void*)");
+    check("foo(pe, pb)", foo(pe, pb), "foo(A*, void*)");
+    check("foo(""Hello"", p)", foo("Hello", p), "foo(string, char*)");
+    check("foo(sa, p)", foo(sa, p), "foo(string, char*)");
+  }
+
+  {
+    let d: D;
+
+    printLn("class member overloading tests");
+    check("d.foo()", d.foo(), "D.foo()");
+    check("d.foo(10)", d.foo(10), "D.foo(int)");
+    check("d.foo(11.0)", d.foo(11.0), "D.foo(float)");
+    check("d.foo(""Hello"")", d.foo("Hello"), "D.foo(string)");
+
+    let p: char*;
+    let sa: char[10];
+
+    check("d.foo(p)", d.foo(p), "D.foo(string)");
+    check("d.foo(sa)", d.foo(sa), "D.foo(string)");
+
+    let pa: A*;
+    let pb: B*;
+    let pc: C*;
+    let pd: D*;
+
+    check("d.foo(pa)", d.foo(pa), "D.foo(A*)");
+    check("d.foo(pb)", d.foo(pb), "D.foo(B*)");
+    check("d.foo(pc)", d.foo(pc), "D.foo(B*)");
+    check("d.foo(pd)", d.foo(pd), "D.foo(void*)");
+
+    let pi: int*;
+    let ai: int[10];
+    let ai2: int[20];    
+
+    check("d.foo(pi)", d.foo(pi), "D.foo(int*)");
+    check("d.foo(ai)", d.foo(ai), "D.foo(int[10])");
+    check("d.foo(ai2)", d.foo(ai2), "D.foo(int*)");
+
+    let pf: float*;
+    let af: float[10];
+
+    check("d.foo(pf)", d.foo(pf), "D.foo(void*)");
+    check("d.foo(af)", d.foo(af), "D.foo(void*)");
+
+    check("d.foo(10, 20)", d.foo(10, 20), "D.foo(int, int)");
+    check("d.foo(pa, pb)", d.foo(pa, pb), "D.foo(A*, void*)");
+    check("d.foo(pa, pc)", d.foo(pa, pc), "D.foo(A*, C*)");
+    check("d.foo(pb, pc)", d.foo(pb, pc), "D.foo(B*, C*)");
+    check("d.foo(pc, pc)", d.foo(pc, pc), "D.foo(B*, C*)");
+
+    let pe: E*;
+
+    check("d.foo(pf, pa)", d.foo(pf, pa), "D.foo(void*, void*)");
+    check("d.foo(pe, pb)", d.foo(pe, pb), "D.foo(A*, void*)");
+    check("d.foo(""Hello"", p)", d.foo("Hello", p), "D.foo(string, char*)");
+    check("d.foo(sa, p)", d.foo(sa, p), "D.foo(string, char*)");
+  }
+
+  return 0.0;
+}

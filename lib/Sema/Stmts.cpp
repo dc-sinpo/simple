@@ -34,7 +34,7 @@ StmtAST* ExprStmtAST::doSemantic(Scope* scope) {
     // Check semantic for an expression
     Expr = Expr->semantic(scope);
 
-    // If expression has 0 type then it's error
+    // If expression has nullptr type then it's error
     if (!Expr->ExprType) {
       scope->report(Loc, diag::ERR_SemaNoTypeForExpression);
       return nullptr;
@@ -42,6 +42,35 @@ StmtAST* ExprStmtAST::doSemantic(Scope* scope) {
   }
 
   return this;
+}
+
+/// Check does this block need to be promoted in new block or not
+/// \param[in] oldStmt - old statement
+/// \param[in] scope - current scope
+bool needPromoteBodyToBlock(StmtAST* oldStmt, Scope* scope) {
+  // Only declarations can have new block
+  if (!isa<DeclStmtAST>(oldStmt)) {
+    return false;
+  }
+
+  // Perform semantic on this statement. We need to be sure that type is resolved
+  // for variable
+  DeclStmtAST* declStmt = (DeclStmtAST*)oldStmt->semantic(scope);
+  SymbolList::iterator it = declStmt->Decls.begin();
+  assert(isa<VarDeclAST>(*it));
+  VarDeclAST* var = (VarDeclAST*)*it;
+
+  // Only class can lead to new block
+  if (isa<ClassTypeAST>(var->ThisType)) {
+    ClassDeclAST* classDecl = (ClassDeclAST*)var->ThisType->getSymbol();
+
+    // Only class with destructor can lead to new block
+    if (classDecl->Dtor) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // BlockStmtAST implementation
@@ -59,10 +88,13 @@ StmtAST* BlockStmtAST::doSemantic(Scope* scope) {
   Scope* s = scope->push((ScopeSymbol*)ThisBlock);
   
   // Create landing pad 
-  LandingPad = new LandingPadAST(s->LandingPad);
+  // Note: We patch NeedCleanup later if needed
+  LandingPad = new LandingPadAST(s->LandingPad, false);
   LandingPad->OwnerBlock = this;
+  LandingPad->NeedCleanup = s->LandingPad->NeedCleanup;
   s->LandingPad = LandingPad;
 
+  bool atStart = true; // We need that for new blocks creation
   ExprList args;
 
   // Check all nested statements
@@ -71,6 +103,48 @@ StmtAST* BlockStmtAST::doSemantic(Scope* scope) {
     if (HasJump) {
       scope->report(Loc, diag::ERR_SemaDeadCode);
       return nullptr;
+    }
+
+    if (needPromoteBodyToBlock(*it, s)) {
+      // It's need cleanup
+      LandingPad->NeedCleanup = true;
+
+      if (!atStart) {
+        // Append rest statements to new block
+        StmtList body(it, end);
+        BlockStmtAST* newBlockStmt = new BlockStmtAST(Loc, body);
+        Body.erase(it, end);
+        Body.push_back(newBlockStmt);
+        // Perform semantic on just created block and get HasJump and HasReturn
+        // from it
+        newBlockStmt->IsPromoted = true;
+        newBlockStmt->semantic(s);
+        HasJump = newBlockStmt->HasJump;
+        HasReturn = newBlockStmt->HasReturn;
+        break;
+      }
+
+      DeclStmtAST* decls = (DeclStmtAST*)*it;
+      
+      for (SymbolList::iterator it2 = decls->Decls.begin(), end2 = decls->Decls.end();
+        it2 != end2; ++it2) {
+        VarDeclAST* var = (VarDeclAST*)*it2;
+        // Create destructor call for this variable
+        ExprAST* cleanupExpr = new CallExprAST(
+          Loc,
+          new MemberAccessExprAST(
+            Loc,
+            new IdExprAST(Loc, var->Id),
+            Name::Dtor),
+          args);
+        // Perform semantic on just created expression
+        cleanupExpr = cleanupExpr->semantic(s);
+        // Add it to the list
+        CleanupList.push_back(cleanupExpr);
+      }
+    } else if (!isa<DeclStmtAST>(*it)) {
+      // If it's not declaration then we should set atStart to false
+      atStart = false;
     }
 
     // Check semantic for statement
@@ -89,6 +163,24 @@ StmtAST* BlockStmtAST::doSemantic(Scope* scope) {
       // it could have return statement too
       HasJump = (*it)->hasJump();
       HasReturn = (*it)->hasReturn();
+    }
+  }
+
+  // If we need cleanup then we should set some states
+  if (LandingPad->NeedCleanup) {
+    // Get escaped function and patch it's NeedCleanup
+    FuncDeclAST* fncDecl = (s->EnclosedFunc);
+    fncDecl->LandingPad->NeedCleanup = true;
+
+    if (!LandingPad->Prev->OwnerBlock) {
+      // If previous landing pad isn't block set NeedCleanup to true
+      LandingPad->Prev->NeedCleanup = true;
+    } else {
+      // Previous landing pad is block but we need set NeedCleanup for it only
+      // if we have return, continue or break statement in our body
+      if (LandingPad->Returns || LandingPad->Continues || LandingPad->Breaks) {
+        LandingPad->Prev->NeedCleanup = true;
+      }
     }
   }
 
@@ -219,7 +311,8 @@ StmtAST* WhileStmtAST::doSemantic(Scope* scope) {
   scope->BreakLoc = this;
   scope->ContinueLoc = this;
   // Create new landing pad
-  LandingPad = new LandingPadAST(scope->LandingPad);
+  LandingPad = new LandingPadAST(scope->LandingPad, false);
+  LandingPad->NeedCleanup = scope->LandingPad->NeedCleanup;
   LandingPad->IsLoop = true;
   scope->LandingPad = LandingPad;
 
@@ -346,7 +439,8 @@ StmtAST* IfStmtAST::doSemantic(Scope* scope) {
   }
 
   // Create new landing pad
-  LandingPad = new LandingPadAST(scope->LandingPad);
+  LandingPad = new LandingPadAST(scope->LandingPad, false);
+  LandingPad->NeedCleanup = scope->LandingPad->NeedCleanup;
   scope->LandingPad = LandingPad;
 
   // Perform semantic for then and else parts
